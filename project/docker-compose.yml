@@ -1,0 +1,90 @@
+version: "3.9"
+
+# Topologi produksi on-prem mini PC (docs/11-DEPLOYMENT.md §6-8): SATU file
+# ini yang dijalankan `docker-compose up -d` di mini PC sekolah. Saat
+# relokasi fisik (docs/11-DEPLOYMENT.md §8), urutan shutdown mengikuti
+# ketergantungan service di bawah: app → worker → redis → postgres.
+#
+# PENTING (docs/12-OPERATIONS.md §5.1): volume postgres_data, redis_data, dan
+# MinIO (kalau dipakai lokal) WAJIB punya salinan backup di lokasi kedua di
+# luar mini PC ini SEBELUM container dimatikan untuk dipindahkan — file ini
+# sendiri tidak melakukan backup otomatis, itu tanggung jawab job/skrip
+# terpisah (lihat docs/12-OPERATIONS.md).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: absensi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?wajib diisi, lihat .env.example}
+      POSTGRES_DB: absensi_biometrik
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U absensi"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Tidak ada "ports" yang di-expose ke host — hanya diakses via jaringan
+    # internal Docker oleh service app/worker (docs/15-INFRASTRUCTURE-SPEC.md
+    # §Network Security: PostgreSQL di subnet privat tanpa akses langsung).
+    # Buka port 5432 secara eksplisit hanya kalau memang butuh akses langsung
+    # dari luar container untuk debugging development.
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?wajib diisi, lihat .env.example}"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://absensi:${POSTGRES_PASSWORD}@postgres:5432/absensi_biometrik
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://absensi:${POSTGRES_PASSWORD}@postgres:5432/absensi_biometrik
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+    # Worker diskalakan independen dari app — di produksi jalankan
+    # `docker-compose up -d --scale worker=3` untuk menambah instance
+    # (docs/03-SAD.md §5 Scaling Strategy), bukan mengubah file ini.
+
+volumes:
+  postgres_data:
+  redis_data:

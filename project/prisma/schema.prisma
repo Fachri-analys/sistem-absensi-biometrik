@@ -1,0 +1,381 @@
+// Prisma schema — Sistem Absensi Biometrik Sekolah
+// Sumber acuan: docs/04-ERD.md dan docs/13-DATA-DICTIONARY.md
+// PostgreSQL adalah SOURCE OF TRUTH. Tidak ada binary/foto besar disimpan di sini —
+// hanya object_key/referensi ke Object Storage.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------------------------
+
+enum RoleCode {
+  SUPER_ADMIN
+  ADMIN
+  OPERATOR
+  WALI_KELAS
+  VIEWER
+}
+
+enum AttendanceStatus {
+  ON_TIME
+  LATE
+  MANUAL
+}
+
+enum CameraStatus {
+  ONLINE
+  OFFLINE
+}
+
+enum AttendanceChannel {
+  // Siswa scan wajah via HP pribadi masing-masing — alur UTAMA sistem ini
+  // (dikonfirmasi langsung: siswa mengetik NISN, kamera HP aktif, liveness,
+  // embedding, similarity, keputusan hadir — 1:1 verification, bukan 1:N).
+  STUDENT_PHONE
+  // Disediakan untuk kemungkinan perangkat bersama/tepercaya milik sekolah
+  // di masa depan (kios/tablet di gerbang) — BELUM dikonfirmasi dibutuhkan,
+  // skema disiapkan tapi tidak diimplementasikan endpoint-nya kecuali
+  // diminta eksplisit.
+  KIOSK
+}
+
+enum SyncEntityType {
+  STUDENTS
+  CLASSES
+  MAJORS
+  TEACHERS
+}
+
+enum SyncMode {
+  FULL
+  INCREMENTAL
+}
+
+enum SyncStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum ReportType {
+  ATTENDANCE_EXPORT
+}
+
+enum ReportStatus {
+  PENDING
+  PROCESSING
+  DONE
+  FAILED
+}
+
+enum EnrollmentSourceType {
+  MANUAL_UPLOAD
+  BATCH_UPLOAD
+}
+
+// ---------------------------------------------------------------------------
+// AUTH / RBAC
+// ---------------------------------------------------------------------------
+
+model Role {
+  id          String   @id @default(uuid())
+  code        RoleCode @unique
+  description String?
+
+  users User[]
+
+  @@map("roles")
+}
+
+model User {
+  id               String    @id @default(uuid())
+  email            String    @unique
+  passwordHash     String    @map("password_hash")
+  fullName         String    @map("full_name")
+  roleId           String    @map("role_id")
+  role             Role      @relation(fields: [roleId], references: [id])
+  // Untuk WALI_KELAS: kelas yang diampu. Nullable untuk role lain.
+  homeroomClassId  String?   @map("homeroom_class_id")
+  homeroomClass    Class?    @relation(fields: [homeroomClassId], references: [id])
+  isActive         Boolean   @default(true) @map("is_active")
+  lastLoginAt      DateTime? @map("last_login_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  deletedAt        DateTime? @map("deleted_at")
+
+  auditLogs    AuditLog[]
+  reports      Report[]
+  teacherLink  Teacher?
+
+  @@index([roleId])
+  @@index([homeroomClassId])
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// DATA MASTER: MAJORS / CLASSES / TEACHERS / STUDENTS
+// ---------------------------------------------------------------------------
+
+model Major {
+  id         String    @id @default(uuid())
+  externalId String?   @unique @map("external_id")
+  name       String
+  code       String    @unique
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  deletedAt  DateTime? @map("deleted_at")
+
+  classes Class[]
+
+  @@map("majors")
+}
+
+model Teacher {
+  id         String    @id @default(uuid())
+  externalId String?   @unique @map("external_id")
+  fullName   String    @map("full_name")
+  nip        String?   @unique
+  userId     String?   @unique @map("user_id")
+  user       User?     @relation(fields: [userId], references: [id])
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  deletedAt  DateTime? @map("deleted_at")
+
+  homeroomOf Class[] @relation("HomeroomTeacher")
+
+  @@map("teachers")
+}
+
+model Class {
+  id                 String    @id @default(uuid())
+  externalId         String?   @unique @map("external_id")
+  name               String
+  majorId            String    @map("major_id")
+  major              Major     @relation(fields: [majorId], references: [id])
+  homeroomTeacherId  String?   @map("homeroom_teacher_id")
+  homeroomTeacher    Teacher?  @relation("HomeroomTeacher", fields: [homeroomTeacherId], references: [id])
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  deletedAt          DateTime? @map("deleted_at")
+
+  students           Student[]
+  homeroomUsers      User[]
+  attendanceSettings AttendanceSetting[]
+
+  @@index([majorId])
+  @@index([homeroomTeacherId])
+  @@map("classes")
+}
+
+model Student {
+  id             String    @id @default(uuid())
+  externalId     String?   @unique @map("external_id")
+  nisn           String    @unique
+  fullName       String    @map("full_name")
+  classId        String    @map("class_id")
+  class          Class     @relation(fields: [classId], references: [id])
+  gender         String?
+  photoObjectKey String?   @map("photo_object_key")
+  isActive       Boolean   @default(true) @map("is_active")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  deletedAt      DateTime? @map("deleted_at")
+
+  biometricProfile BiometricProfile?
+  attendances      Attendance[]
+
+  // Index komposit untuk pola query paling umum: list siswa per kelas + status aktif.
+  @@index([classId, isActive])
+  @@index([externalId])
+  @@map("students")
+}
+
+// ---------------------------------------------------------------------------
+// BIOMETRIC (isolasi ketat — lihat docs/06-SECURITY-SPEC.md)
+// ---------------------------------------------------------------------------
+
+model BiometricProfile {
+  id                String               @id @default(uuid())
+  studentId         String               @unique @map("student_id")
+  student           Student              @relation(fields: [studentId], references: [id])
+  // Referensi ke embedding TERENKRIPSI, bukan embedding mentah dalam kolom biasa.
+  // Implementasi enkripsi kolom/tabel ditentukan oleh provider KMS yang dipilih (lihat OQ-SEC-01).
+  embeddingRef      String               @map("embedding_ref")
+  embeddingVersion  String               @map("embedding_version")
+  sourceType        EnrollmentSourceType @map("source_type")
+  enrolledAt        DateTime             @default(now()) @map("enrolled_at")
+  isActive          Boolean              @default(true) @map("is_active")
+  createdAt         DateTime             @default(now()) @map("created_at")
+  updatedAt         DateTime             @updatedAt @map("updated_at")
+
+  @@map("biometric_profiles")
+}
+
+// ---------------------------------------------------------------------------
+// CAMERA & ATTENDANCE
+// ---------------------------------------------------------------------------
+
+model Camera {
+  id          String        @id @default(uuid())
+  name        String
+  location    String
+  apiKeyHash  String        @unique @map("api_key_hash")
+  status      CameraStatus  @default(OFFLINE)
+  lastSeenAt  DateTime?     @map("last_seen_at")
+  resolution  String?
+  fps         Int?
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+  deletedAt   DateTime?     @map("deleted_at")
+
+  attendances Attendance[]
+
+  @@map("cameras")
+}
+
+model AttendanceSetting {
+  id                String   @id @default(uuid())
+  // Null = default sekolah (berlaku untuk semua kelas tanpa override eksplisit)
+  classId           String?  @map("class_id")
+  class             Class?   @relation(fields: [classId], references: [id])
+  // Disimpan sebagai MENIT SEJAK TENGAH MALAM waktu sekolah (WIB), BUKAN
+  // sebagai kolom TIME/DateTime. Kolom TIME PostgreSQL tanpa timezone rawan
+  // disalahartikan oleh driver (bisa dibaca sebagai UTC atau timezone lokal
+  // mesin server, tergantung environment) — untuk konsep "jam berapa
+  // sekolah masuk" yang murni wall-clock, representasi integer eksplisit
+  // jauh lebih aman daripada bergantung pada interpretasi timezone driver.
+  // Lihat src/lib/school-time.ts untuk konversi & pembanding.
+  // Contoh: 07:00 WIB = 420.
+  checkInStartMinutes     Int @map("check_in_start_minutes")
+  checkInLateAfterMinutes Int @map("check_in_late_after_minutes")
+  // Ambang skor kecocokan wajah. Default 0.90 (90%) — keputusan produk resmi, lihat docs/02-SRS.md NFR-ACC-001.
+  matchThreshold    Decimal  @default(0.90) @db.Decimal(4, 3) @map("match_threshold")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@index([classId])
+  @@map("attendance_settings")
+}
+
+model Attendance {
+  id             String            @id @default(uuid())
+  studentId      String            @map("student_id")
+  student        Student           @relation(fields: [studentId], references: [id])
+  // Nullable: alur utama sistem ini adalah siswa presensi via HP pribadi
+  // masing-masing (channel STUDENT_PHONE) — TIDAK ADA perangkat kamera
+  // fisik yang terlibat, jadi tidak ada cameraId untuk dikaitkan. Kolom
+  // (dan tabel `cameras`) tetap disediakan untuk KIOSK di masa depan jika
+  // sekolah menambah perangkat bersama, bukan dihapus.
+  cameraId       String?           @map("camera_id")
+  camera         Camera?           @relation(fields: [cameraId], references: [id])
+  channel        AttendanceChannel @default(STUDENT_PHONE) @map("channel")
+  matchScore     Decimal           @db.Decimal(4, 3) @map("match_score")
+  livenessPassed Boolean           @map("liveness_passed")
+  status         AttendanceStatus
+  recordedAt     DateTime          @map("recorded_at")
+  // Tanggal (tanpa jam) dari recordedAt, di-set eksplisit oleh application
+  // code saat insert — BUKAN kolom generated/computed di level DB. Tujuannya
+  // murni menyediakan target untuk unique constraint di bawah, sehingga
+  // "satu siswa maksimum satu presensi valid per hari" ditegakkan oleh
+  // PostgreSQL sendiri (race-proof di bawah concurrency tinggi), bukan
+  // hanya oleh query SELECT-lalu-INSERT di application code yang rentan
+  // TOCTOU race saat banyak siswa scan bersamaan (lihat TC-ATT-003 di
+  // docs/10-TEST-PLAN.md, dan catatan di src/app/api/attendance/checkin/route.ts).
+  attendanceDate DateTime          @db.Date @map("attendance_date")
+  createdAt      DateTime          @default(now()) @map("created_at")
+  // Kunci idempotency (studentId+timestamp terkuantisasi, lihat
+  // docs/05-API-SPEC.md) — mencegah double-submit dari HP siswa (mis. tap
+  // tombol dua kali / retry jaringan) menghasilkan dua baris.
+  idempotencyKey String            @unique @map("idempotency_key")
+
+  // Index komposit untuk query dashboard/log yang paling sering dipakai:
+  // "kehadiran siswa X terurut waktu" dan "kehadiran per kamera terurut waktu".
+  @@unique([studentId, attendanceDate])
+  @@index([studentId, recordedAt])
+  @@index([cameraId, recordedAt])
+  @@index([status, recordedAt])
+  @@map("attendance")
+}
+
+// ---------------------------------------------------------------------------
+// SYNC
+// ---------------------------------------------------------------------------
+
+model SyncLog {
+  id            String         @id @default(uuid())
+  entityType    SyncEntityType @map("entity_type")
+  syncType      SyncMode       @map("sync_type")
+  status        SyncStatus     @default(RUNNING)
+  startedAt     DateTime       @default(now()) @map("started_at")
+  finishedAt    DateTime?      @map("finished_at")
+  totalRecords  Int            @default(0) @map("total_records")
+  successCount  Int            @default(0) @map("success_count")
+  failedCount   Int            @default(0) @map("failed_count")
+
+  errors SyncError[]
+
+  @@index([entityType, status])
+  @@map("sync_logs")
+}
+
+model SyncError {
+  id              String   @id @default(uuid())
+  syncLogId       String   @map("sync_log_id")
+  syncLog         SyncLog  @relation(fields: [syncLogId], references: [id])
+  externalId      String   @map("external_id")
+  errorMessage    String   @map("error_message")
+  payloadSnapshot Json?    @map("payload_snapshot")
+  retried         Boolean  @default(false)
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([syncLogId])
+  @@map("sync_errors")
+}
+
+// ---------------------------------------------------------------------------
+// AUDIT & REPORTS
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  actorUserId    String?  @map("actor_user_id")
+  actorUser      User?    @relation(fields: [actorUserId], references: [id])
+  action         String
+  entityType     String   @map("entity_type")
+  entityId       String   @map("entity_id")
+  beforeSnapshot Json?    @map("before_snapshot")
+  afterSnapshot  Json?    @map("after_snapshot")
+  ipAddress      String?  @map("ip_address")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([actorUserId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Report {
+  id            String       @id @default(uuid())
+  requestedBy   String       @map("requested_by")
+  requester     User         @relation(fields: [requestedBy], references: [id])
+  type          ReportType
+  filterParams  Json         @map("filter_params")
+  status        ReportStatus @default(PENDING)
+  objectKey     String?      @map("object_key")
+  expiresAt     DateTime?    @map("expires_at")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  @@index([requestedBy])
+  @@index([status])
+  @@map("reports")
+}

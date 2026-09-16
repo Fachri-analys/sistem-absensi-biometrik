@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+        env:
+          # Dummy — hanya untuk generate types, tidak connect ke DB manapun
+          # di tahap ini (docs/11-DEPLOYMENT.md: DB nyata dipakai di
+          # test:integration lewat Testcontainers, bukan di sini).
+          DATABASE_URL: "postgresql://ci:ci@localhost:5432/ci"
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests (tanpa Docker/DB)
+        run: npm run test:unit
+
+      # Integration test (Testcontainers) SENGAJA dipisah sebagai job/step
+      # terpisah di masa depan, bukan digabung di sini — runner CI standar
+      # perlu Docker-in-Docker diaktifkan eksplisit, dan integration test
+      # jauh lebih lambat daripada unit test (lihat docs/10-TEST-PLAN.md).
+      # Ditandai sebagai langkah lanjutan, bukan diklaim sudah berjalan di
+      # sini padahal belum diverifikasi jalan di GitHub Actions.

@@ -1,0 +1,60 @@
+{
+  "name": "sistem-absensi-biometrik",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "db:seed": "prisma db seed",
+    "worker": "tsx worker/index.ts",
+    "test": "vitest run",
+    "test:unit": "vitest run --dir src",
+    "test:integration": "vitest run --dir tests/integration --pool=forks --poolOptions.forks.singleFork=true",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "next": "^14.2.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "bcryptjs": "^2.4.3",
+    "jose": "^5.9.0",
+    "zod": "^3.23.0",
+    "ioredis": "^5.4.0",
+    "bullmq": "^5.12.0",
+    "@aws-sdk/client-s3": "^3.637.0",
+    "@aws-sdk/s3-request-presigner": "^3.637.0",
+    "pino": "^9.4.0",
+    "pino-pretty": "^11.2.0",
+    "nanoid": "^5.0.7",
+    "pdfkit": "^0.15.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "prisma": "^5.20.0",
+    "tsx": "^4.19.0",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/pdfkit": "^0.13.4",
+    "vitest": "^2.0.0",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "^14.2.0",
+    "@testcontainers/postgresql": "^10.13.0",
+    "@testcontainers/redis": "^10.13.0",
+    "testcontainers": "^10.13.0"
+  }
+}

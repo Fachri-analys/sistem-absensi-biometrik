@@ -1,0 +1,36 @@
+# docs/11-DEPLOYMENT.md §3 Docker, docs/03-SAD.md §5 Scaling Strategy —
+# Worker adalah proses TERPISAH dari APP, image sendiri, agar bisa di-scale
+# independen (WORKER-1, WORKER-2, ... docs/15-INFRASTRUCTURE-SPEC.md).
+
+FROM node:20-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 worker
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json ./
+COPY prisma ./prisma
+COPY worker ./worker
+COPY src/lib ./src/lib
+COPY tsconfig.json ./
+
+ENV DATABASE_URL="postgresql://build:build@localhost:5432/build"
+RUN npx prisma generate
+# tsx dipakai untuk menjalankan TypeScript langsung tanpa build step
+# terpisah — worker adalah proses long-running, bukan bundle yang perlu
+# dioptimasi seketat output Next.js (lihat package.json script "worker").
+# Untuk skala produksi besar, pertimbangkan build ke JS murni (tsc/esbuild)
+# agar startup lebih cepat — ditandai sebagai peningkatan lanjutan, bukan
+# blocker untuk skala mini PC saat ini.
+
+RUN chown -R worker:nodejs /app
+USER worker
+
+CMD ["npx", "tsx", "worker/index.ts"]

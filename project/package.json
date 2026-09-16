@@ -21,8 +21,8 @@
     "db:seed": "prisma db seed",
     "worker": "tsx worker/index.ts",
     "test": "vitest run",
-    "test:unit": "vitest run --dir src",
-    "test:integration": "vitest run --dir tests/integration --pool=forks --poolOptions.forks.singleFork=true",
+    "test:unit": "vitest run src",
+    "test:integration": "vitest run tests/integration --pool=forks --poolOptions.forks.singleFork=true",
     "test:watch": "vitest"
   },
   "dependencies": {

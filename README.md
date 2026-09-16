@@ -110,3 +110,52 @@ npm run db:seed
    - Evaluasi skor kemiripan (`matchScore`). Nilai default `0.40` dapat disesuaikan per-kelas pada tabel `attendance_settings` jika ingin memperketat (misal `0.45` - `0.50`) sesuai kondisi pencahayaan di lapangan.
 3. **Uji Anti-Spoofing**:
    - Uji coba menghadapkan foto cetak atau layar HP siswa ke kamera; pastikan liveness mendeteksi `passed: false`.
+
+---
+
+## 👥 Panduan Pengembangan Tim / Dev Kelompok
+
+Untuk mempermudah kolaborasi dan pembagian tugas tim pengembang:
+
+### 1. Rekomendasi Pembagian Tugas Anggota Kelompok
+| Peran | Anggota | Fokus Tugas & File Kunci |
+|---|---|---|
+| **Frontend UI/UX** | Dev 1 | Menyempurnakan tampilan web mobile siswa (`src/app/checkin/`), dashboard admin (`src/app/dashboard/`), dan halaman login/auth (`src/app/auth/`). |
+| **Backend & Database** | Dev 2 | Manajemen data master Siswa/Kelas/Jurusan (`src/app/api/students`, `classes`), sinkronisasi Dapodik/SIS (`docs/07-SYNC-SPEC.md`), dan migrasi Prisma (`prisma/schema.prisma`). |
+| **AI & Biometrik** | Dev 3 | Download dan kalibrasi bobot model `minifasnet.onnx`, pengujian dataset foto wajah Indonesia, dan benchmark FPS/latensi inference (`project/face-service/`). |
+| **DevOps & QA / Testing** | Dev 4 | Setup Docker Compose produksi, konfigurasi Redis & MinIO Object Storage, menjalankan integration test (`npm run test:integration`), dan CI/CD pipeline GitHub Actions. |
+
+### 2. Panduan Setup Anggota Kelompok Baru
+Anggota tim yang baru bergabung cukup menjalankan perintah berikut:
+```bash
+# 1. Clone repositori
+git clone https://github.com/Fachri-analys/sistem-absensi-biometrik.git
+cd sistem-absensi-biometrik
+
+# 2. Setup environment
+cd project
+cp .env.example .env
+
+# 3. Install & compile
+npm install
+npx prisma generate
+
+# 4. Jalankan dev server
+npm run dev
+```
+
+### 3. Aturan Workflow Git (Git Flow)
+1. **Jangan push langsung ke `main`**. Buat branch fitur masing-masing:
+   ```bash
+   git checkout -b feat/nama-fitur-kamu
+   ```
+2. Sebelum commit, pastikan typecheck dan unit test lulus:
+   ```bash
+   npm run typecheck
+   npm run test:unit
+   ```
+3. Push branch dan buat Pull Request (PR) ke `main`:
+   ```bash
+   git push origin feat/nama-fitur-kamu
+   ```
+

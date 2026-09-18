@@ -46,7 +46,7 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const url = new URL(req.url);
-  let effectiveClassId: string | undefined;
+  let effectiveClassId: string | null | undefined;
   try {
     effectiveClassId = await resolveClassScopeOrThrow(
       session,
@@ -67,7 +67,7 @@ export async function GET(req: Request): Promise<Response> {
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       }
 
-      send("connected", { classId: effectiveClassId ?? null });
+      send("connected", { classId: effectiveClassId ?? undefined });
 
       const heartbeat = setInterval(() => {
         // Komentar SSE (diawali ":") tidak memicu event di klien, hanya
@@ -75,9 +75,9 @@ export async function GET(req: Request): Promise<Response> {
         controller.enqueue(encoder.encode(`: heartbeat\n\n`));
       }, HEARTBEAT_INTERVAL_MS);
 
-      subscriber.on("message", (_channel, message) => {
+      subscriber.on("message", (_channel, rawMessage) => {
         try {
-          const event = JSON.parse(message) as AttendanceRealtimeEvent;
+          const event = JSON.parse(rawMessage) as AttendanceRealtimeEvent;
 
           // WALI_KELAS hanya menerima event kelasnya sendiri — filter di sisi
           // server (defense in depth), bukan cuma di UI.

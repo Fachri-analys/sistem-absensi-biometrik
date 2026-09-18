@@ -5,6 +5,8 @@ import { requireAuth } from "@/lib/require-auth";
 import { parseOrThrow, updateCameraSchema } from "@/lib/validation";
 import { generateCameraApiKey, hashCameraApiKey } from "@/lib/camera-key";
 import { recordAudit, getClientIp } from "@/lib/audit";
+export const dynamic = "force-dynamic";
+
 
 interface RouteContext {
   params: { id: string };

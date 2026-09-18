@@ -5,6 +5,8 @@ import { requireAuth } from "@/lib/require-auth";
 import { parseOrThrow, createClassSchema } from "@/lib/validation";
 import { recordAudit, getClientIp } from "@/lib/audit";
 import { withCacheFallback, invalidateCache } from "@/lib/redis";
+export const dynamic = "force-dynamic";
+
 
 const CLASSES_LIST_CACHE_KEY = "classes:list";
 const CLASSES_LIST_TTL_SECONDS = 600; // 10 menit (docs/08-CACHE-SPEC.md)

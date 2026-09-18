@@ -6,6 +6,8 @@ import { resolveClassScopeOrThrow } from "@/lib/scope";
 import { withCacheFallback } from "@/lib/redis";
 import { computeTodayAttendanceStats } from "@/lib/dashboard-stats";
 import { getSchoolDayRangeUtc, schoolLocalDateKey } from "@/lib/school-time";
+export const dynamic = "force-dynamic";
+
 
 const TODAY_STATS_TTL_SECONDS = 30; // docs/08-CACHE-SPEC.md: dashboard:stats TTL 30 detik
 

@@ -7,6 +7,8 @@ import { recordAudit, getClientIp } from "@/lib/audit";
 import { uploadObject, Buckets } from "@/lib/object-storage";
 import { faceEnrollmentQueue } from "@/lib/queues";
 import { Errors } from "@/lib/api-errors";
+export const dynamic = "force-dynamic";
+
 
 const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;

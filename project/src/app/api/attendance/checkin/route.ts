@@ -14,6 +14,8 @@ import { invalidateCache } from "@/lib/redis";
 import { schoolLocalDateKey } from "@/lib/school-time";
 import { nanoid } from "nanoid";
 
+export const dynamic = "force-dynamic";
+
 /**
  * POST /api/attendance/checkin — alur presensi UTAMA sistem ini.
  *

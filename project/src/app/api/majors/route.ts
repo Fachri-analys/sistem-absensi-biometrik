@@ -4,6 +4,8 @@ import { withErrorHandling, Errors } from "@/lib/api-errors";
 import { requireAuth } from "@/lib/require-auth";
 import { parseOrThrow, createMajorSchema } from "@/lib/validation";
 import { recordAudit, getClientIp } from "@/lib/audit";
+export const dynamic = "force-dynamic";
+
 
 export const GET = withErrorHandling(async (req: Request) => {
   await requireAuth(req, ["ADMIN", "OPERATOR", "WALI_KELAS", "VIEWER", "SUPER_ADMIN"]);

@@ -16,6 +16,8 @@ import { publishAttendanceEvent } from "@/lib/realtime";
 import { invalidateCache } from "@/lib/redis";
 import { schoolAttendanceDateValue, schoolLocalDateKey } from "@/lib/school-time";
 
+export const dynamic = "force-dynamic";
+
 // Jendela deduplikasi presensi (FR-ATTENDANCE-003). Nilai default 5 menit,
 // bisa dipindah ke attendance_settings di iterasi berikutnya jika kebijakan
 // sekolah butuh per-kelas — untuk sekarang cukup satu konstanta global karena
@@ -42,7 +44,7 @@ export const GET = withErrorHandling(async (req: Request) => {
 
   const where: Prisma.AttendanceWhereInput = {
     ...(effectiveClassId ? { student: { classId: effectiveClassId } } : {}),
-    ...(query.status ? { status: query.status } : {}),
+    ...(query.status ? { status: query.status as Prisma.AttendanceWhereInput["status"] } : {}),
     ...(query.dateFrom || query.dateTo
       ? {
           recordedAt: {
@@ -63,7 +65,10 @@ export const GET = withErrorHandling(async (req: Request) => {
       : {}),
   };
 
-  const result = await paginate({ page: query.page, pageSize: query.pageSize }, ({ skip, take }) => ({
+  const page = Number(query.page ?? 1);
+  const pageSize = Number(query.pageSize ?? 20);
+
+  const result = await paginate({ page, pageSize }, ({ skip, take }) => ({
     findMany: prisma.attendance.findMany({
       where,
       skip,
@@ -114,9 +119,9 @@ export const GET = withErrorHandling(async (req: Request) => {
  *    baru enqueue job turunan & publish realtime (non-blocking, best-effort).
  */
 export const POST = withErrorHandling(async (req: Request) => {
-  const cameraId = await requireCameraAuth(req, async (apiKey) => {
+  const camera = await requireCameraAuth(req, async (apiKey) => {
     const hash = hashCameraApiKey(apiKey);
-    const camera = await prisma.camera.findUnique({
+    const cameraRecord = await prisma.camera.findUnique({
       where: { apiKeyHash: hash, deletedAt: null },
       select: { id: true },
     });
@@ -124,8 +129,9 @@ export const POST = withErrorHandling(async (req: Request) => {
     // ONLINE/OFFLINE adalah status konektivitas, bukan aktif/nonaktif akun.
     // deletedAt: null (sudah difilter di query) sudah cukup sebagai syarat
     // "kamera terdaftar dan boleh dipakai".
-    return camera ? { id: camera.id, isActive: true } : null;
+    return cameraRecord ? { id: cameraRecord.id, isActive: true } : null;
   });
+  const cameraId = camera.id;
 
   const body = parseOrThrow(createAttendanceSchema, await req.json().catch(() => ({})));
 
@@ -158,9 +164,10 @@ export const POST = withErrorHandling(async (req: Request) => {
   if (!body.livenessPassed) {
     throw Errors.unprocessable("Liveness check tidak lolos — kemungkinan spoof.");
   }
-  if (body.matchScore < setting.matchThreshold) {
+  const matchScore = Number(body.matchScore ?? 0);
+  if (matchScore < setting.matchThreshold) {
     throw Errors.unprocessable(
-      `Skor kecocokan (${body.matchScore}) di bawah ambang minimum (${setting.matchThreshold}).`
+      `Skor kecocokan (${matchScore}) di bawah ambang minimum (${setting.matchThreshold}).`
     );
   }
 
@@ -206,7 +213,7 @@ export const POST = withErrorHandling(async (req: Request) => {
       data: {
         studentId: student.id,
         cameraId,
-        matchScore: body.matchScore,
+        matchScore,
         livenessPassed: body.livenessPassed,
         status,
         recordedAt,

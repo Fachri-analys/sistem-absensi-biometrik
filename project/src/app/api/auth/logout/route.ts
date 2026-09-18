@@ -5,6 +5,8 @@ import { SESSION_COOKIE_NAME } from "@/lib/auth";
 import { revokeToken } from "@/lib/token-revocation";
 import { recordAudit, getClientIp } from "@/lib/audit";
 import { env } from "@/lib/env";
+export const dynamic = "force-dynamic";
+
 
 /**
  * POST /api/auth/logout (FR-AUTH-003).

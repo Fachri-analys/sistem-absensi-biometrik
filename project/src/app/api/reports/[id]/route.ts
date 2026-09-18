@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { withErrorHandling, Errors } from "@/lib/api-errors";
 import { requireAuth } from "@/lib/require-auth";
 import { getPresignedDownloadUrl, Buckets } from "@/lib/object-storage";
+export const dynamic = "force-dynamic";
+
 
 interface RouteContext {
   params: { id: string };

@@ -5,6 +5,8 @@ import { resolveClassScopeOrThrow } from "@/lib/scope";
 import { withCacheFallback } from "@/lib/redis";
 import { computeTodayAttendanceStats, dashboardCacheKey } from "@/lib/dashboard-stats";
 
+export const dynamic = "force-dynamic";
+
 const STATS_TTL_SECONDS = 30; // docs/08-CACHE-SPEC.md
 
 /**

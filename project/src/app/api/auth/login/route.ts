@@ -7,6 +7,8 @@ import { checkRateLimit, RateLimitPresets } from "@/lib/rate-limit";
 import { recordAudit, getClientIp } from "@/lib/audit";
 import { logger } from "@/lib/logger";
 import { env } from "@/lib/env";
+export const dynamic = "force-dynamic";
+
 
 /**
  * POST /api/auth/login (docs/05-API-SPEC.md, FR-AUTH-001, FR-AUTH-002)

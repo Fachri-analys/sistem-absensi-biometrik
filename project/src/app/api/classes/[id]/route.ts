@@ -5,6 +5,8 @@ import { requireAuth } from "@/lib/require-auth";
 import { parseOrThrow, updateClassSchema } from "@/lib/validation";
 import { recordAudit, getClientIp } from "@/lib/audit";
 import { invalidateCache } from "@/lib/redis";
+export const dynamic = "force-dynamic";
+
 
 interface RouteContext {
   params: { id: string };

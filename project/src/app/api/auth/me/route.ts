@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { withErrorHandling, Errors } from "@/lib/api-errors";
 import { requireAuth } from "@/lib/require-auth";
+export const dynamic = "force-dynamic";
+
 
 /**
  * GET /api/auth/me (FR-AUTH-004).

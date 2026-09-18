@@ -6,6 +6,8 @@ import { parseOrThrow, exportReportSchema } from "@/lib/validation";
 import { resolveClassScopeOrThrow } from "@/lib/scope";
 import { reportGenerationQueue } from "@/lib/queues";
 import { recordAudit, getClientIp } from "@/lib/audit";
+export const dynamic = "force-dynamic";
+
 
 /**
  * POST /api/reports/export (FR-REPORT-001)

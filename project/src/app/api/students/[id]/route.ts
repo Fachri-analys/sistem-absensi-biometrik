@@ -4,6 +4,8 @@ import { withErrorHandling, Errors } from "@/lib/api-errors";
 import { requireAuth } from "@/lib/require-auth";
 import { parseOrThrow, updateStudentSchema } from "@/lib/validation";
 import { recordAudit, getClientIp } from "@/lib/audit";
+export const dynamic = "force-dynamic";
+
 
 interface RouteContext {
   params: { id: string };

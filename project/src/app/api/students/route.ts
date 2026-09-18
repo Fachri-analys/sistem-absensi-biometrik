@@ -7,6 +7,8 @@ import { parseOrThrow, studentListQuerySchema, createStudentSchema } from "@/lib
 import { paginate } from "@/lib/scope";
 import { resolveClassScopeOrThrow } from "@/lib/scope";
 import { recordAudit, getClientIp } from "@/lib/audit";
+export const dynamic = "force-dynamic";
+
 
 /**
  * GET /api/students (FR-STUDENT-001, FR-STUDENT-003, FR-STUDENT-004)
@@ -47,7 +49,10 @@ export const GET = withErrorHandling(async (req: Request) => {
       : {}),
   };
 
-  const result = await paginate({ page: query.page, pageSize: query.pageSize }, ({ skip, take }) => ({
+  const page = Number(query.page ?? 1);
+  const pageSize = Number(query.pageSize ?? 20);
+
+  const result = await paginate({ page, pageSize }, ({ skip, take }) => ({
     findMany: prisma.student.findMany({
       where,
       skip,

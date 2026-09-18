@@ -5,6 +5,8 @@ import { requireAuth } from "@/lib/require-auth";
 import { parseOrThrow, createCameraSchema } from "@/lib/validation";
 import { generateCameraApiKey, hashCameraApiKey } from "@/lib/camera-key";
 import { recordAudit, getClientIp } from "@/lib/audit";
+export const dynamic = "force-dynamic";
+
 
 export const GET = withErrorHandling(async (req: Request) => {
   await requireAuth(req, ["ADMIN", "OPERATOR", "SUPER_ADMIN"]);

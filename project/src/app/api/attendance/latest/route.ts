@@ -5,6 +5,8 @@ import { requireAuth } from "@/lib/require-auth";
 import { resolveClassScopeOrThrow } from "@/lib/scope";
 import { withCacheFallback } from "@/lib/redis";
 
+export const dynamic = "force-dynamic";
+
 const LATEST_CACHE_TTL_SECONDS = 5; // docs/08-CACHE-SPEC.md
 
 export const GET = withErrorHandling(async (req: Request) => {

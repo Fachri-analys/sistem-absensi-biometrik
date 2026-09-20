@@ -119,7 +119,7 @@ export const GET = withErrorHandling(async (req: Request) => {
  *    baru enqueue job turunan & publish realtime (non-blocking, best-effort).
  */
 export const POST = withErrorHandling(async (req: Request) => {
-  const camera = await requireCameraAuth(req, async (apiKey) => {
+  const cameraId = await requireCameraAuth(req, async (apiKey) => {
     const hash = hashCameraApiKey(apiKey);
     const cameraRecord = await prisma.camera.findUnique({
       where: { apiKeyHash: hash, deletedAt: null },
@@ -131,7 +131,7 @@ export const POST = withErrorHandling(async (req: Request) => {
     // "kamera terdaftar dan boleh dipakai".
     return cameraRecord ? { id: cameraRecord.id, isActive: true } : null;
   });
-  const cameraId = camera.id;
+
 
   const body = parseOrThrow(createAttendanceSchema, await req.json().catch(() => ({})));
 

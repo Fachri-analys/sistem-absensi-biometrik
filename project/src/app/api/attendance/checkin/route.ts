@@ -106,11 +106,31 @@ export const POST = withErrorHandling(async (req: Request) => {
   const photoBuffer = Buffer.from(await photo.arrayBuffer());
   const engine = getFaceRecognitionEngine();
 
+  // 1) Validasi kualitas foto SEBELUM ekstraksi embedding & recognition
+  // Memeriksa: ukuran wajah, blur, brightness, resolusi, pose ekstrem,
+  // wajah terpotong, no_face, multiple_faces.
+  // Jika tidak memenuhi syarat, jangan lanjutkan ke recognition dan jangan buat attendance.
+  const quality = await engine.validatePhotoQuality(photoBuffer);
+  if (!quality.isValid) {
+    const reason = quality.reason ?? "invalid_image";
+    return NextResponse.json(
+      {
+        error: {
+          code: "QUALITY_CHECK_FAILED",
+          message: `Kualitas foto tidak memenuhi syarat: ${reason}`,
+          reason,
+        },
+        reason,
+      },
+      { status: 422 }
+    );
+  }
+
   let similarity: number;
   let livenessPassed: boolean;
 
   try {
-    // 1) Liveness DULU, sebelum generate embedding — kalau ini foto/video
+    // 2) Liveness DULU, sebelum generate embedding — kalau ini foto/video
     // orang lain yang ditunjukkan ke kamera (spoof), tidak ada gunanya
     // lanjut menghitung kecocokan sama sekali.
     const liveness = await engine.checkLiveness(photoBuffer);
@@ -132,10 +152,22 @@ export const POST = withErrorHandling(async (req: Request) => {
     }
   } catch (err) {
     if (err instanceof FaceServiceError) {
-      // Jika face-service menolak dengan 422 (wajah tidak terdeteksi / multiple faces)
-      // atau 400 (gambar rusak), kembalikan genericFailure (HTTP 422) anti-enumeration,
-      // BUKAN error 500 internal server error.
+      // Jika face-service menolak dengan 422/400 dan menyertakan alasan kualitas foto,
+      // teruskan alasan penolakan kualitas yang jelas ke response klien.
       if (err.statusCode === 422 || err.statusCode === 400) {
+        if (err.reason) {
+          return NextResponse.json(
+            {
+              error: {
+                code: "QUALITY_CHECK_FAILED",
+                message: `Kualitas foto tidak memenuhi syarat: ${err.reason}`,
+                reason: err.reason,
+              },
+              reason: err.reason,
+            },
+            { status: 422 }
+          );
+        }
         throw genericFailure();
       }
     }

@@ -79,15 +79,12 @@ async def ready() -> JSONResponse:
 @app.post("/v1/quality", response_model=QualityResponse, dependencies=[Depends(require_internal_key)])
 async def check_quality(photo: UploadFile = File(...)) -> QualityResponse:
     """
-    FR-ENROLL-003 — validasi foto STATIS (rapor) sebelum generate embedding
-    saat enrolment. TIDAK melakukan liveness check (foto rapor bukan capture
-    langsung, tidak relevan memeriksa "hidup atau tidak").
+    FR-ENROLL-003 — validasi kualitas foto STATIS (rapor) maupun sebelum presensi.
+    Memeriksa resolusi, blur, brightness, no_face, multiple_faces, face_too_small,
+    face_cropped, extreme_pose, atau invalid_image.
     """
     data = await _read_upload(photo)
-    try:
-        result = face_engine.check_quality(data)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    result = face_engine.check_quality(data)
     return QualityResponse(is_valid=result.is_valid, reason=result.reason)
 
 
@@ -121,26 +118,22 @@ async def reload_liveness() -> dict:
 @app.post("/v1/embedding", response_model=EmbeddingResponse, dependencies=[Depends(require_internal_key)])
 async def generate_embedding(photo: UploadFile = File(...)) -> EmbeddingResponse:
     """
-    Dipakai saat enrolment (foto rapor) MAUPUN presensi (live capture, hanya
-    dipanggil KALAU liveness sudah lolos — lihat komentar di
-    src/app/api/attendance/checkin/route.ts). Mengembalikan embeddingRef
-    yang SUDAH TERENKRIPSI (lihat security.py) — APP Next.js menyimpannya
-    sebagai string opaque, tidak pernah melihat vektor mentahnya.
+    Dipakai saat enrolment (foto rapor) MAUPUN presensi (live capture).
+    Sebelum face embedding dibuat, quality check dijalankan terlebih dahulu untuk
+    memastikan wajah layak diproses. Jika tidak layak, kembalikan HTTP 422 dengan reason jelas.
     """
     data = await _read_upload(photo)
-    try:
-        detected = face_engine.detect_single_face(data)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    detected, quality = face_engine.extract_face_with_quality(data)
 
-    if detected is None:
+    if not quality.is_valid or detected is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Wajah tidak terdeteksi atau lebih dari satu wajah pada foto.",
+            detail={"error": "QUALITY_CHECK_FAILED", "reason": quality.reason},
         )
 
     embedding_ref = encrypt_embedding(detected.embedding.tolist(), EMBEDDING_VERSION)
     return EmbeddingResponse(embedding_ref=embedding_ref, embedding_version=EMBEDDING_VERSION)
+
 
 
 @app.post("/v1/compare", response_model=CompareResponse, dependencies=[Depends(require_internal_key)])

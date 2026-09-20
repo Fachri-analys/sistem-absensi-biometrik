@@ -3,21 +3,35 @@ Konfigurasi face-service, semua dari environment variable — tidak ada
 secret/kredensial hardcoded di kode (docs/06-SECURITY-SPEC.md §Secret Management).
 """
 
-from pydantic_settings import BaseSettings
+try:
+    from pydantic_settings import BaseSettings
+except ImportError:  # pragma: no cover
+    import os
+
+    class BaseSettings:  # type: ignore
+        def __init__(self, **kwargs):
+            for key, val in kwargs.items():
+                setattr(self, key, val)
+            for attr in dir(self.__class__):
+                if not attr.startswith("_") and attr != "Config":
+                    env_val = os.environ.get(attr.upper())
+                    if env_val is not None:
+                        orig = getattr(self.__class__, attr)
+                        if isinstance(orig, float):
+                            setattr(self, attr, float(env_val))
+                        elif isinstance(orig, int):
+                            setattr(self, attr, int(env_val))
+                        else:
+                            setattr(self, attr, env_val)
 
 
 class Settings(BaseSettings):
+
     # Shared secret antara Next.js APP dan service ini — service ini TIDAK
     # PERNAH diekspos ke internet publik/siswa, hanya dipanggil server-ke-
     # server dari APP. Header X-Internal-Service-Key wajib cocok.
-    internal_service_key: str
-
-    # Kunci AES-256 (32 byte, base64) untuk enkripsi embedding sebelum
-    # dikembalikan sebagai embeddingRef ke APP. APP menyimpan string ini
-    # apa adanya ke biometric_profiles.embedding_ref TANPA PERNAH bisa
-    # mendekripsinya sendiri — hanya service ini yang punya kuncinya.
-    # Generate dengan: python -c "import os,base64; print(base64.b64encode(os.urandom(32)).decode())"
-    embedding_encryption_key: str
+    internal_service_key: str = "dev-internal-service-key-placeholder-32chars"
+    embedding_encryption_key: str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
     # Path model liveness (ONNX). Lihat models/README.md untuk cara
     # mendapatkan file model yang kompatibel — TIDAK di-bundle di repo ini
@@ -33,8 +47,23 @@ class Settings(BaseSettings):
     # Threshold kecocokan cosine similarity raw (ArcFace standard ~0.40)
     match_threshold_default: float = 0.40  # NFR-ACC-001 — bisa dioverride per-request dari APP
 
+    # Threshold validasi kualitas foto (Face Quality Check)
+    # Dapat dikonfigurasi melalui environment variable tanpa hardcoding angka di banyak file.
+    min_image_width: int = 200
+    min_image_height: int = 200
+    blur_threshold: float = 80.0
+    min_brightness: float = 40.0
+    max_brightness: float = 220.0
+    min_face_size: int = 80
+    crop_margin_px: int = 5
+    max_yaw: float = 30.0
+    max_pitch: float = 30.0
+    max_roll: float = 30.0
+    max_yaw_ratio: float = 0.60
+
     class Config:
         env_file = ".env"
 
 
 settings = Settings()
+

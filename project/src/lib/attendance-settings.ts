@@ -49,20 +49,27 @@ export async function getEffectiveAttendanceSetting(
   const schoolDefault = settings.find((s) => s.classId === null);
   const effective = classSpecific ?? schoolDefault;
 
+  const matchThreshold =
+    env.FACE_MATCH_THRESHOLD_OVERRIDE !== undefined
+      ? env.FACE_MATCH_THRESHOLD_OVERRIDE
+      : effective
+      ? new Prisma.Decimal(effective.matchThreshold).toNumber()
+      : DEFAULT_THRESHOLD;
+
   if (!effective) {
     // Tidak ada konfigurasi sama sekali (belum di-setup admin) — pakai nilai
     // aman dari environment daripada gagal keras, tapi dengan jadwal yang
     // jelas tidak masuk akal (menit 0 = tengah malam WIB) supaya OPERATOR
     // sadar harus setup jadwal, bukan diam-diam menganggap semua ON_TIME.
     return {
-      matchThreshold: DEFAULT_THRESHOLD,
+      matchThreshold,
       checkInStartMinutes: 0,
       checkInLateAfterMinutes: 0,
     };
   }
 
   return {
-    matchThreshold: new Prisma.Decimal(effective.matchThreshold).toNumber(),
+    matchThreshold,
     checkInStartMinutes: effective.checkInStartMinutes,
     checkInLateAfterMinutes: effective.checkInLateAfterMinutes,
   };

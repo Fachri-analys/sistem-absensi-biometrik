@@ -61,7 +61,9 @@ def encrypt_multi_embedding(vectors: list[list[float]], version: str) -> str:
     nonce = os.urandom(12)
     # Compute centroid: average all vectors, then L2-normalize it
     centroid = np.mean(vectors, axis=0)
-    centroid = centroid / np.linalg.norm(centroid)
+    norm = float(np.linalg.norm(centroid))
+    if norm > 1e-12:
+        centroid = centroid / norm
     
     plaintext = json.dumps({
         "vectors": vectors,

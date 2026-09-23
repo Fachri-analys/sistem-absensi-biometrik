@@ -178,4 +178,10 @@ async def compare_embeddings(body: CompareRequest) -> CompareResponse:
     best_similarity = max(
         face_engine.cosine_similarity(live_vec, sv) for sv in stored_vectors
     )
-    return CompareResponse(similarity=best_similarity)
+    threshold = settings.match_threshold
+    is_match = best_similarity >= threshold
+    return CompareResponse(
+        similarity=best_similarity,
+        is_match=is_match,
+        threshold=threshold,
+    )

@@ -31,6 +31,8 @@ class CompareRequest(BaseModel):
 
 class CompareResponse(BaseModel):
     similarity: float
+    is_match: bool | None = None
+    threshold: float | None = None
 
 
 class ErrorResponse(BaseModel):

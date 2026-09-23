@@ -145,7 +145,9 @@ class FaceEngine:
 
         normed_emb = getattr(face, "normed_embedding", None)
         if normed_emb is None and hasattr(face, "embedding"):
-            normed_emb = face.embedding / np.linalg.norm(face.embedding)
+            normed_emb = FaceEngine.safe_l2_normalize(face.embedding)
+        elif normed_emb is not None:
+            normed_emb = FaceEngine.safe_l2_normalize(normed_emb)
 
         detected = DetectedFace(embedding=normed_emb, bbox=tuple(face.bbox))
         return detected, QualityResult(is_valid=True, reason=None)
@@ -167,14 +169,38 @@ class FaceEngine:
         return detected
 
     @staticmethod
-    def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
-        a = np.array(vec_a, dtype=np.float32)
-        b = np.array(vec_b, dtype=np.float32)
-        denom = (np.linalg.norm(a) * np.linalg.norm(b))
-        if denom == 0:
+    def safe_l2_normalize(vec: np.ndarray | list[float], eps: float = 1e-12) -> np.ndarray:
+        """
+        Menormalkan vektor embedding ke unit hypersphere L2 (norm = 1.0).
+        Menghindari division by zero atau NaN jika vektor kosong/rusak.
+        """
+        arr = np.asarray(vec, dtype=np.float32)
+        norm = float(np.linalg.norm(arr))
+        if norm > eps:
+            return arr / norm
+        return np.zeros_like(arr)
+
+    @staticmethod
+    def cosine_similarity(
+        vec_a: list[float] | np.ndarray,
+        vec_b: list[float] | np.ndarray,
+        clamp: bool = True,
+    ) -> float:
+        """
+        Menghitung cosine similarity antara dua vektor.
+        - clamp=True (default untuk presensi): membatasi hasil ke [0.0, 1.0].
+        - clamp=False (untuk evaluasi/analisis distribusi): mempertahankan nilai mentah [-1.0, 1.0].
+        """
+        a = np.asarray(vec_a, dtype=np.float32)
+        b = np.asarray(vec_b, dtype=np.float32)
+        norm_a = float(np.linalg.norm(a))
+        norm_b = float(np.linalg.norm(b))
+        if norm_a == 0.0 or norm_b == 0.0:
             return 0.0
-        raw = float(np.dot(a, b) / denom)
-        return max(0.0, min(1.0, raw))
+        raw = float(np.dot(a, b) / (norm_a * norm_b))
+        if clamp:
+            return max(0.0, min(1.0, raw))
+        return max(-1.0, min(1.0, raw))
 
 
 # Instance tunggal, di-load sekali saat modul pertama diimpor (saat FastAPI startup).

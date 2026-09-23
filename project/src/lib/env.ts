@@ -28,6 +28,7 @@ const envSchema = z.object({
     .string()
     .min(32, "CAMERA_API_KEY_SALT wajib minimal 32 karakter."),
   FACE_MATCH_THRESHOLD_DEFAULT: z.coerce.number().min(0).max(1).default(0.4),
+  FACE_MATCH_THRESHOLD_OVERRIDE: z.coerce.number().min(0).max(1).optional(),
   LOG_LEVEL: z.string().default("info"),
   OBJECT_STORAGE_ENDPOINT: z.string().min(1, "OBJECT_STORAGE_ENDPOINT wajib diisi."),
   OBJECT_STORAGE_ACCESS_KEY: z.string().min(1, "OBJECT_STORAGE_ACCESS_KEY wajib diisi."),

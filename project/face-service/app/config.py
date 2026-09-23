@@ -45,7 +45,9 @@ class Settings(BaseSettings):
     insightface_model_name: str = "buffalo_l"
 
     # Threshold kecocokan cosine similarity raw (ArcFace standard ~0.40)
-    match_threshold_default: float = 0.40  # NFR-ACC-001 — bisa dioverride per-request dari APP
+    # Dapat dikonfigurasi melalui MATCH_THRESHOLD atau MATCH_THRESHOLD_DEFAULT di .env
+    match_threshold: float = 0.40
+    match_threshold_default: float = 0.40  # backward compatibility alias
 
     # Threshold validasi kualitas foto (Face Quality Check)
     # Dapat dikonfigurasi melalui environment variable tanpa hardcoding angka di banyak file.

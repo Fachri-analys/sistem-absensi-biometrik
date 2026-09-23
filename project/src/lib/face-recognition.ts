@@ -61,6 +61,12 @@ export interface EmbeddingResult {
   embeddingVersion: string;
 }
 
+export interface MultiSampleEmbeddingResult {
+  embeddingRef: string;
+  embeddingVersion: string;
+  sampleCount: number;
+}
+
 export interface FaceRecognitionEngine {
   /** FR-ENROLL-003: validasi kualitas foto statis sebelum generate embedding (dipakai saat enrolment & presensi). */
   validatePhotoQuality(imageBuffer: Buffer): Promise<PhotoQualityResult>;
@@ -77,6 +83,9 @@ export interface FaceRecognitionEngine {
 
   /** FR-ENROLL-004: generate embedding dari foto yang lolos validasi (enrolment MAUPUN presensi). */
   generateEmbedding(imageBuffer: Buffer): Promise<EmbeddingResult>;
+
+  /** Multi-sample enrollment: generate embedding from multiple face photos. */
+  generateMultiSampleEmbedding(imageBuffers: Buffer[]): Promise<MultiSampleEmbeddingResult>;
 
   /**
    * Perbandingan 1:1 SATU live capture vs SATU template tersimpan — BUKAN
@@ -129,6 +138,17 @@ export class MockFaceRecognitionEngine implements FaceRecognitionEngine {
     return {
       embeddingRef: `mock:${hash}`,
       embeddingVersion: "mock-v0",
+    };
+  }
+
+  async generateMultiSampleEmbedding(imageBuffers: Buffer[]): Promise<MultiSampleEmbeddingResult> {
+    const { createHash } = await import("node:crypto");
+    const combined = Buffer.concat(imageBuffers);
+    const hash = createHash("sha256").update(combined).digest("hex");
+    return {
+      embeddingRef: `mock-multi:${hash}`,
+      embeddingVersion: "mock-v0",
+      sampleCount: imageBuffers.length,
     };
   }
 
@@ -259,6 +279,49 @@ class HttpFaceRecognitionEngine implements FaceRecognitionEngine {
     return {
       embeddingRef: result.embedding_ref,
       embeddingVersion: result.embedding_version,
+    };
+  }
+
+  async generateMultiSampleEmbedding(imageBuffers: Buffer[]): Promise<MultiSampleEmbeddingResult> {
+    const formData = new FormData();
+    for (const buf of imageBuffers) {
+      formData.append("photos", new Blob([new Uint8Array(buf)]), "photo.jpg");
+    }
+
+    const response = await fetch(`${env.FACE_SERVICE_URL}/v1/enrollment-embedding`, {
+      method: "POST",
+      headers: { "X-Internal-Service-Key": env.FACE_SERVICE_API_KEY },
+      body: formData,
+      signal: AbortSignal.timeout(30000), // longer timeout for multi-photo
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      let detail = body;
+      let reason: string | undefined;
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed.detail) {
+          if (typeof parsed.detail === "string") {
+            detail = parsed.detail;
+          } else if (typeof parsed.detail === "object" && parsed.detail !== null) {
+            detail = JSON.stringify(parsed.detail);
+            reason = parsed.detail.reason;
+          }
+        }
+      } catch {}
+      throw new FaceServiceError(response.status, detail, "/v1/enrollment-embedding", reason);
+    }
+
+    const result = (await response.json()) as {
+      embedding_ref: string;
+      embedding_version: string;
+      sample_count: number;
+    };
+    return {
+      embeddingRef: result.embedding_ref,
+      embeddingVersion: result.embedding_version,
+      sampleCount: result.sample_count,
     };
   }
 

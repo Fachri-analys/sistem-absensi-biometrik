@@ -176,5 +176,67 @@ class TestFaceQualityPipeline(unittest.TestCase):
         self.assertEqual(len(detected.embedding), 512)
 
 
+class TestMultiSampleEncryption(unittest.TestCase):
+    """Tests for multi-sample embedding encrypt/decrypt and backward compatibility."""
+
+    def test_encrypt_decrypt_multi_sample(self):
+        from app.security import encrypt_multi_embedding, decrypt_embedding_vectors
+        import numpy as np
+        # Create 3 fake 512-dim vectors
+        vecs = [np.random.randn(512).tolist() for _ in range(3)]
+        ref = encrypt_multi_embedding(vecs, "test-v1")
+        decoded_vecs, ver = decrypt_embedding_vectors(ref)
+        self.assertEqual(ver, "test-v1")
+        self.assertEqual(len(decoded_vecs), 3)
+        for orig, decoded in zip(vecs, decoded_vecs):
+            np.testing.assert_array_almost_equal(orig, decoded, decimal=5)
+
+    def test_backward_compat_single_vector(self):
+        from app.security import encrypt_embedding, decrypt_embedding_vectors, decrypt_embedding
+        import numpy as np
+        vec = np.random.randn(512).tolist()
+        ref = encrypt_embedding(vec, "old-v1")
+        # decrypt_embedding_vectors should wrap single vec in a list
+        decoded_vecs, ver = decrypt_embedding_vectors(ref)
+        self.assertEqual(ver, "old-v1")
+        self.assertEqual(len(decoded_vecs), 1)
+        np.testing.assert_array_almost_equal(vec, decoded_vecs[0], decimal=5)
+        # decrypt_embedding should still work unchanged for single
+        decoded_single, ver2 = decrypt_embedding(ref)
+        np.testing.assert_array_almost_equal(vec, decoded_single, decimal=5)
+
+    def test_decrypt_embedding_returns_centroid_for_multi(self):
+        from app.security import encrypt_multi_embedding, decrypt_embedding
+        import numpy as np
+        vecs = [np.random.randn(512).tolist() for _ in range(3)]
+        ref = encrypt_multi_embedding(vecs, "test-v1")
+        # decrypt_embedding should return centroid for multi-sample
+        centroid, ver = decrypt_embedding(ref)
+        self.assertEqual(ver, "test-v1")
+        # Verify it's a normalized centroid
+        centroid_np = np.array(centroid)
+        self.assertAlmostEqual(float(np.linalg.norm(centroid_np)), 1.0, places=5)
+
+    def test_compare_multi_vs_single(self):
+        """Ensure cosine_similarity works with multi-sample stored vectors."""
+        from app.face_engine import FaceEngine
+        import numpy as np
+        vec_a = np.random.randn(512).astype(np.float32)
+        vec_a = (vec_a / np.linalg.norm(vec_a)).tolist()
+        # Slightly perturbed copies
+        vec_b = (np.array(vec_a) + np.random.randn(512) * 0.01).tolist()
+        vec_c = (np.array(vec_a) + np.random.randn(512) * 0.05).tolist()
+        sim_exact = FaceEngine.cosine_similarity(vec_a, vec_a)
+        sim_b = FaceEngine.cosine_similarity(vec_a, vec_b)
+        sim_c = FaceEngine.cosine_similarity(vec_a, vec_c)
+        # The exact match should be the highest
+        self.assertGreater(sim_exact, sim_b)
+        self.assertGreater(sim_b, sim_c)
+        # Best of multi should pick the exact match
+        best = max(sim_exact, sim_b, sim_c)
+        self.assertAlmostEqual(best, sim_exact, places=5)
+
+
 if __name__ == "__main__":
     unittest.main()
+

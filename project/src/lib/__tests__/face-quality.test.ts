@@ -77,4 +77,33 @@ describe("Face Quality Pipeline & Engine Contracts", () => {
     expect(error.reason).toBe("image_too_blurry");
     expect(error.message).toContain("face-service /v1/embedding gagal (422)");
   });
+
+  it("MockFaceRecognitionEngine mendukung generateMultiSampleEmbedding", async () => {
+    const { MockFaceRecognitionEngine } = await import("../face-recognition");
+    const engine = new MockFaceRecognitionEngine();
+
+    const buf1 = Buffer.alloc(25 * 1024);
+    const buf2 = Buffer.alloc(25 * 1024);
+    buf2.fill(1); // different content
+
+    const result = await engine.generateMultiSampleEmbedding([buf1, buf2]);
+    expect(result.embeddingRef).toMatch(/^mock-multi:/);
+    expect(result.embeddingVersion).toBe("mock-v0");
+    expect(result.sampleCount).toBe(2);
+  });
+
+  it("generateMultiSampleEmbedding menghasilkan ref berbeda untuk sampel berbeda", async () => {
+    const { MockFaceRecognitionEngine } = await import("../face-recognition");
+    const engine = new MockFaceRecognitionEngine();
+
+    const buf1 = Buffer.alloc(25 * 1024);
+    const buf2 = Buffer.alloc(25 * 1024);
+    buf2.fill(1);
+    const buf3 = Buffer.alloc(25 * 1024);
+    buf3.fill(2);
+
+    const result1 = await engine.generateMultiSampleEmbedding([buf1, buf2]);
+    const result2 = await engine.generateMultiSampleEmbedding([buf1, buf3]);
+    expect(result1.embeddingRef).not.toBe(result2.embeddingRef);
+  });
 });

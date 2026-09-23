@@ -61,16 +61,40 @@ export const POST = withErrorHandling(async (req: Request, { params }: RouteCont
   const tempObjectKey = `enrollment/${student.id}/${enrollmentId}.${extensionFor(photo.type)}`;
   const buffer = Buffer.from(await photo.arrayBuffer());
 
-  // Upload ke bucket SEMENTARA (terisolasi) — bukan bucket foto tampilan
-  // siswa (docs/06-SECURITY-SPEC.md §Biometric Security).
-  await uploadObject(Buckets.enrollmentTemp, tempObjectKey, buffer, photo.type);
+  // Support multi-sample: collect additional photos from 'photos' field
+  const additionalPhotos: File[] = [];
+  if (formData) {
+    const photosField = formData.getAll("photos");
+    for (const p of photosField) {
+      if (p instanceof File && ALLOWED_MIME_TYPES.has(p.type) && p.size <= MAX_FILE_SIZE_BYTES) {
+        additionalPhotos.push(p);
+      }
+    }
+  }
+
+  const allBuffers: Buffer[] = [buffer];
+  const allTempKeys: string[] = [tempObjectKey];
+
+  for (const extra of additionalPhotos.slice(0, 4)) {
+    const extraId = randomUUID();
+    const extraKey = `enrollment/${student.id}/${extraId}.${extensionFor(extra.type)}`;
+    const extraBuf = Buffer.from(await extra.arrayBuffer());
+    allBuffers.push(extraBuf);
+    allTempKeys.push(extraKey);
+  }
+
+  // Upload ALL photos to temp bucket
+  for (const [i, buf] of allBuffers.entries()) {
+    await uploadObject(Buckets.enrollmentTemp, allTempKeys[i]!, buf, "image/jpeg");
+  }
 
   await faceEnrollmentQueue.add(
     "enroll",
     {
       enrollmentId,
       studentId: student.id,
-      tempObjectKey,
+      tempObjectKey: allTempKeys[0],
+      tempObjectKeys: allTempKeys,
       source: "MANUAL_UPLOAD" as const,
     },
     { jobId: `enroll-${student.id}` }

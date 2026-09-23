@@ -17,6 +17,13 @@ class EmbeddingResponse(BaseModel):
     embedding_version: str
 
 
+class MultiEmbeddingResponse(BaseModel):
+    embedding_ref: str
+    embedding_version: str
+    sample_count: int
+
+
+
 class CompareRequest(BaseModel):
     live_embedding_ref: str
     stored_embedding_ref: str

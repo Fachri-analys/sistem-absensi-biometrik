@@ -10,6 +10,7 @@ import base64
 import json
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import os
+import numpy as np
 
 from fastapi import Header, HTTPException, status
 
@@ -45,8 +46,51 @@ def decrypt_embedding(embedding_ref: str) -> tuple[list[float], str]:
         nonce, ciphertext = raw[:12], raw[12:]
         plaintext = aesgcm.decrypt(nonce, ciphertext, associated_data=None)
         data = json.loads(plaintext)
+        if "centroid" in data:
+            return data["centroid"], data["ver"]
         return data["v"], data["ver"]
     except Exception as exc:  # noqa: BLE001 — sengaja tangkap luas, semua kegagalan berarti ref tidak valid
+        raise ValueError("embeddingRef tidak valid atau rusak.") from exc
+
+
+def encrypt_multi_embedding(vectors: list[list[float]], version: str) -> str:
+    """
+    Encrypts multiple vectors and their normalized centroid into a single reference.
+    """
+    aesgcm = _get_aesgcm()
+    nonce = os.urandom(12)
+    # Compute centroid: average all vectors, then L2-normalize it
+    centroid = np.mean(vectors, axis=0)
+    centroid = centroid / np.linalg.norm(centroid)
+    
+    plaintext = json.dumps({
+        "vectors": vectors,
+        "centroid": centroid.tolist(),
+        "ver": version,
+        "n": len(vectors)
+    }).encode("utf-8")
+    
+    ciphertext = aesgcm.encrypt(nonce, plaintext, associated_data=None)
+    return base64.b64encode(nonce + ciphertext).decode("ascii")
+
+
+def decrypt_embedding_vectors(embedding_ref: str) -> tuple[list[list[float]], str]:
+    """
+    Decrypts embedding ref and returns a list of vectors.
+    Backward compatible with single-vector format.
+    """
+    aesgcm = _get_aesgcm()
+    try:
+        raw = base64.b64decode(embedding_ref)
+        nonce, ciphertext = raw[:12], raw[12:]
+        plaintext = aesgcm.decrypt(nonce, ciphertext, associated_data=None)
+        data = json.loads(plaintext)
+        if "vectors" in data:
+            return data["vectors"], data["ver"]
+        if "v" in data:
+            return [data["v"]], data["ver"]
+        raise ValueError("Unknown payload format")
+    except Exception as exc:
         raise ValueError("embeddingRef tidak valid atau rusak.") from exc
 
 

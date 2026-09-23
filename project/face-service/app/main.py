@@ -26,10 +26,11 @@ from .schemas import (
     CompareRequest,
     CompareResponse,
     EmbeddingResponse,
+    MultiEmbeddingResponse,
     LivenessResponse,
     QualityResponse,
 )
-from .security import decrypt_embedding, encrypt_embedding, require_internal_key
+from .security import decrypt_embedding, decrypt_embedding_vectors, encrypt_embedding, encrypt_multi_embedding, require_internal_key
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("face-service")
@@ -136,19 +137,45 @@ async def generate_embedding(photo: UploadFile = File(...)) -> EmbeddingResponse
 
 
 
+@app.post("/v1/enrollment-embedding", response_model=MultiEmbeddingResponse, dependencies=[Depends(require_internal_key)])
+async def generate_enrollment_embedding(photos: list[UploadFile] = File(...)) -> MultiEmbeddingResponse:
+    """
+    Multi-sample enrollment: menerima 1-5 foto sampel wajah siswa.
+    Setiap foto diperiksa kualitasnya. Semua embedding dienkripsi dalam satu ref.
+    """
+    if len(photos) == 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Minimal satu foto diperlukan.")
+    if len(photos) > 5:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Maksimal 5 foto per enrollment.")
+
+    vectors: list[list[float]] = []
+    for i, photo in enumerate(photos):
+        data = await _read_upload(photo)
+        detected, quality = face_engine.extract_face_with_quality(data)
+        if not quality.is_valid or detected is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"error": "QUALITY_CHECK_FAILED", "reason": quality.reason, "photo_index": i},
+            )
+        vectors.append(detected.embedding.tolist())
+
+    embedding_ref = encrypt_multi_embedding(vectors, EMBEDDING_VERSION)
+    return MultiEmbeddingResponse(
+        embedding_ref=embedding_ref,
+        embedding_version=EMBEDDING_VERSION,
+        sample_count=len(vectors),
+    )
+
+
 @app.post("/v1/compare", response_model=CompareResponse, dependencies=[Depends(require_internal_key)])
 async def compare_embeddings(body: CompareRequest) -> CompareResponse:
-    """
-    Perbandingan 1:1 — SATU live capture vs SATU template tersimpan (bukan
-    1:N ke seluruh basis siswa), sesuai keputusan arsitektur di
-    src/lib/face-recognition.ts pada project Next.js: siswa mengetik NISN
-    sendiri, sistem sudah tahu siapa yang diklaim.
-    """
     try:
         live_vec, _ = decrypt_embedding(body.live_embedding_ref)
-        stored_vec, _ = decrypt_embedding(body.stored_embedding_ref)
+        stored_vectors, _ = decrypt_embedding_vectors(body.stored_embedding_ref)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    similarity = face_engine.cosine_similarity(live_vec, stored_vec)
-    return CompareResponse(similarity=similarity)
+    best_similarity = max(
+        face_engine.cosine_similarity(live_vec, sv) for sv in stored_vectors
+    )
+    return CompareResponse(similarity=best_similarity)

@@ -23,6 +23,7 @@ export interface FaceEnrollmentJobData {
   enrollmentId: string;
   studentId: string;
   tempObjectKey: string;
+  tempObjectKeys?: string[];
   source: "MANUAL_UPLOAD" | "BATCH_UPLOAD";
 }
 
@@ -50,14 +51,31 @@ export async function processFaceEnrollmentJob(job: Job<FaceEnrollmentJobData>):
       // siswa sungguhan sama sekali. Sekarang foto benar-benar diambil dari
       // Object Storage sebelum diproses.
       const engine = getFaceRecognitionEngine();
-      const photoBuffer = await getObject(Buckets.enrollmentTemp, tempObjectKey);
+      const allKeys = job.data.tempObjectKeys ?? [tempObjectKey];
+      const photoBuffers: Buffer[] = [];
 
-      const quality = await engine.validatePhotoQuality(photoBuffer);
-      if (!quality.isValid) {
-        failureReason = `Kualitas foto tidak memenuhi syarat: ${quality.reason}`;
-        log.warn({ msg: "enrollment_quality_check_failed", reason: quality.reason });
-      } else {
-        const embedding = await engine.generateEmbedding(photoBuffer);
+      for (const key of allKeys) {
+        const buf = await getObject(Buckets.enrollmentTemp, key);
+        photoBuffers.push(buf);
+      }
+
+      // Validate quality for each photo
+      for (const [i, photoBuf] of photoBuffers.entries()) {
+        const quality = await engine.validatePhotoQuality(photoBuf);
+        if (!quality.isValid) {
+          failureReason = `Kualitas foto sampel ${i + 1} tidak memenuhi syarat: ${quality.reason}`;
+          log.warn({ msg: "enrollment_quality_check_failed", reason: quality.reason, photoIndex: i });
+          break;
+        }
+      }
+
+      if (!failureReason) {
+        let embedding;
+        if (photoBuffers.length > 1) {
+          embedding = await engine.generateMultiSampleEmbedding(photoBuffers);
+        } else {
+          embedding = await engine.generateEmbedding(photoBuffers[0]!);
+        }
 
         await prisma.biometricProfile.upsert({
           where: { studentId },
@@ -78,7 +96,7 @@ export async function processFaceEnrollmentJob(job: Job<FaceEnrollmentJobData>):
         });
 
         outcome = "SUCCESS";
-        log.info({ msg: "enrollment_success" });
+        log.info({ msg: "enrollment_success", sampleCount: photoBuffers.length });
       }
     }
   } catch (err) {
@@ -86,22 +104,25 @@ export async function processFaceEnrollmentJob(job: Job<FaceEnrollmentJobData>):
     log.error({ msg: "enrollment_unexpected_error", error: err });
   } finally {
     // WAJIB dijalankan terlepas dari hasil di atas.
-    try {
-      await deleteObject(Buckets.enrollmentTemp, tempObjectKey);
-      log.info({ msg: "enrollment_temp_photo_deleted", tempObjectKey });
-    } catch (deleteErr) {
-      log.error({ msg: "enrollment_temp_photo_delete_failed", tempObjectKey, error: deleteErr });
-      await recordAudit({
-        actorUserId: null,
-        action: "ENROLLMENT_PHOTO_DELETE_FAILED",
-        entityType: "Student",
-        entityId: studentId,
-        after: { enrollmentId, tempObjectKey },
-      });
-      // Dilempar ulang supaya job ditandai gagal dan memicu alert — foto
-      // yang gagal dihapus adalah pelanggaran kebijakan keamanan
-      // (docs/06-SECURITY-SPEC.md), bukan kondisi yang boleh dilewati diam-diam.
-      throw deleteErr;
+    const allKeysToDelete = job.data.tempObjectKeys ?? [job.data.tempObjectKey];
+    for (const key of allKeysToDelete) {
+      try {
+        await deleteObject(Buckets.enrollmentTemp, key);
+        log.info({ msg: "enrollment_temp_photo_deleted", tempObjectKey: key });
+      } catch (deleteErr) {
+        log.error({ msg: "enrollment_temp_photo_delete_failed", tempObjectKey: key, error: deleteErr });
+        await recordAudit({
+          actorUserId: null,
+          action: "ENROLLMENT_PHOTO_DELETE_FAILED",
+          entityType: "Student",
+          entityId: studentId,
+          after: { enrollmentId, tempObjectKey: key },
+        });
+        // Dilempar ulang supaya job ditandai gagal dan memicu alert — foto
+        // yang gagal dihapus adalah pelanggaran kebijakan keamanan
+        // (docs/06-SECURITY-SPEC.md), bukan kondisi yang boleh dilewati diam-diam.
+        throw deleteErr;
+      }
     }
 
     await recordAudit({

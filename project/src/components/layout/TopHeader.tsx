@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { Search, LogOut } from 'lucide-react';
 
@@ -61,11 +62,12 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
             <div className="text-sm font-bold text-slate-800 tracking-tight leading-snug">SMKN 11 Jakarta</div>
             <div className="text-[11px] text-slate-500 font-medium tracking-normal">Unggul • Kreatif • Berkarakter</div>
           </div>
-          <div className="w-9 h-9 rounded-full bg-white border border-slate-200 p-1 shadow-sm flex items-center justify-center shrink-0">
-            <img
+          <div className="w-9 h-9 relative rounded-full bg-white border border-slate-200 p-1 shadow-sm flex items-center justify-center shrink-0">
+            <Image
               src="/images/logo-smkn11.webp"
-              srcSet="/images/logo-smkn11.webp 1x, /images/logo-smkn11-hd.webp 2x"
               alt="Logo SMKN 11 Jakarta"
+              width={32}
+              height={32}
               className="w-full h-full object-contain"
             />
           </div>

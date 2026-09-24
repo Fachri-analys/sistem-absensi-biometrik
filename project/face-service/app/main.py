@@ -79,9 +79,9 @@ async def ready() -> JSONResponse:
 @app.post("/v1/quality", response_model=QualityResponse, dependencies=[Depends(require_internal_key)])
 async def check_quality(photo: UploadFile = File(...)) -> QualityResponse:
     """
-    FR-ENROLL-003 — validasi foto STATIS (rapor) sebelum generate embedding
-    saat enrolment. TIDAK melakukan liveness check (foto rapor bukan capture
-    langsung, tidak relevan memeriksa "hidup atau tidak").
+    Quality gate untuk foto enrolment maupun capture presensi: tepat satu
+    wajah, resolusi cukup, dan tidak buram. TIDAK melakukan liveness check;
+    liveness adalah endpoint/tahap terpisah.
     """
     data = await _read_upload(photo)
     try:
@@ -94,10 +94,9 @@ async def check_quality(photo: UploadFile = File(...)) -> QualityResponse:
 @app.post("/v1/liveness", response_model=LivenessResponse, dependencies=[Depends(require_internal_key)])
 async def check_liveness(photo: UploadFile = File(...)) -> LivenessResponse:
     """
-    Dipakai saat PRESENSI (capture langsung dari HP siswa) — SEBELUM
-    generate embedding (lihat urutan di src/app/api/attendance/checkin/route.ts
-    pada project Next.js: liveness dulu, baru embedding, supaya foto/video
-    spoof tidak perlu diproses lebih jauh).
+    Dipakai saat PRESENSI (capture langsung dari HP siswa) sebagai tahap
+    terpisah setelah quality check dan face recognition. Endpoint ini hanya
+    melakukan liveness; tidak membuat atau membandingkan embedding.
     """
     data = await _read_upload(photo)
     result = liveness_engine.check(data)

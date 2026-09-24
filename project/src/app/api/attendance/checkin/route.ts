@@ -110,15 +110,14 @@ export const POST = withErrorHandling(async (req: Request) => {
   let livenessPassed: boolean;
 
   try {
-    // 1) Liveness DULU, sebelum generate embedding — kalau ini foto/video
-    // orang lain yang ditunjukkan ke kamera (spoof), tidak ada gunanya
-    // lanjut menghitung kecocokan sama sekali.
-    const liveness = await engine.checkLiveness(photoBuffer);
-    if (!liveness.passed) {
+    // 1) Face detection + quality check. Endpoint quality menjalankan
+    // deteksi tepat satu wajah, resolusi, dan blur check.
+    const quality = await engine.validatePhotoQuality(photoBuffer);
+    if (!quality.isValid) {
       throw genericFailure();
     }
-    livenessPassed = liveness.passed;
 
+    // 2) Face recognition (generate embedding + 1:1 comparison).
     const liveEmbedding = await engine.generateEmbedding(photoBuffer);
     similarity = await engine.compareEmbeddings(
       liveEmbedding.embeddingRef,
@@ -130,6 +129,14 @@ export const POST = withErrorHandling(async (req: Request) => {
     if (similarity < setting.matchThreshold) {
       throw genericFailure();
     }
+
+    // 3) Liveness verification adalah tahap terpisah setelah recognition.
+    // Hasil dihitung server dari frame mentah, bukan dari client.
+    const liveness = await engine.checkLiveness(photoBuffer);
+    if (!liveness.passed) {
+      throw genericFailure();
+    }
+    livenessPassed = liveness.passed;
   } catch (err) {
     if (err instanceof FaceServiceError) {
       // Jika face-service menolak dengan 422 (wajah tidak terdeteksi / multiple faces)

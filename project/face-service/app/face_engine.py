@@ -67,6 +67,14 @@ class FaceEngine:
         """
         img = self._decode_image(image_bytes)
 
+        # Detection is the first gate. Do not report a blur/resolution result
+        # for an image that does not contain exactly one face.
+        faces = self._app.get(img)
+        if len(faces) == 0:
+            return QualityResult(is_valid=False, reason="NO_FACE_DETECTED")
+        if len(faces) > 1:
+            return QualityResult(is_valid=False, reason="MULTIPLE_FACES")
+
         h, w = img.shape[:2]
         if min(h, w) < _MIN_RESOLUTION_PX:
             return QualityResult(is_valid=False, reason="LOW_RESOLUTION")
@@ -75,12 +83,6 @@ class FaceEngine:
         blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
         if blur_score < _BLUR_THRESHOLD:
             return QualityResult(is_valid=False, reason="BLURRY")
-
-        faces = self._app.get(img)
-        if len(faces) == 0:
-            return QualityResult(is_valid=False, reason="NO_FACE_DETECTED")
-        if len(faces) > 1:
-            return QualityResult(is_valid=False, reason="MULTIPLE_FACES")
 
         return QualityResult(is_valid=True)
 

@@ -22,16 +22,21 @@ Cek nama file persis di halaman HuggingFace repo tersebut, lalu salin hasil
 download ke `./models/minifasnet.onnx`.
 - Input: 80×80, BGR, range [0.0, 1.0]
 - Set `LIVENESS_INPUT_SIZE=80` di `.env`
+- Set `LIVENESS_INPUT_COLOR_ORDER=BGR`, `LIVENESS_CROP_SCALE=2.7`,
+  `LIVENESS_EXPECTED_CLASS_COUNT=3`, dan `LIVENESS_LIVE_CLASS_INDEX=1`.
+- Output upstream adalah logits 3 kelas; setelah softmax class `1` adalah
+  live/real, sedangkan class `0` dan `2` adalah spoof.
 
 ### Opsi B — johnraivenolazo/face-antispoof-onnx atau facenox/face-antispoof-onnx (GitHub)
 ```bash
 git clone https://github.com/johnraivenolazo/face-antispoof-onnx
 cp face-antispoof-onnx/models/best_model.onnx ./models/minifasnet.onnx
 ```
-- Input: 128×128, **RGB** (bukan BGR!) — kalau pakai model ini, ubah baris
-  konversi warna di `app/liveness_engine.py` (uncomment `cv2.cvtColor(...,
-  COLOR_BGR2RGB)`)
-- Set `LIVENESS_INPUT_SIZE=128` di `.env`
+- Input: 128×128, **RGB** (bukan BGR!). Set `LIVENESS_INPUT_SIZE=128`,
+  `LIVENESS_INPUT_COLOR_ORDER=RGB`, dan `LIVENESS_EXPECTED_CLASS_COUNT=2`.
+- Untuk model `best_model.onnx` dari facenox/johnraivenolazo, set
+  `LIVENESS_LIVE_CLASS_INDEX=0` karena outputnya `[real, spoof]`. Jangan
+  mengandalkan jumlah kelas saja untuk menebak mapping.
 
 ### Opsi C — vendor langsung dari minivision-ai/Silent-Face-Anti-Spoofing
 Repo asli menyediakan bobot `.pth` (PyTorch), perlu dikonversi ke ONNX
@@ -45,9 +50,30 @@ johnraivenolazo/face-antispoof-onnx untuk contoh cara konversi).
 3. Test manual dengan foto wajah ASLI (harus `passed: true`) dan foto layar
    HP yang menampilkan wajah orang lain / foto cetak (harus `passed: false`).
 4. Kalau hasil kebalikannya (foto asli ditolak, foto layar/cetak lolos),
-   kemungkinan preprocessing (ukuran input, urutan channel BGR/RGB, index
-   kelas output) tidak cocok dengan file model yang dipasang — cek kembali
-   dokumentasi model yang dipilih dan sesuaikan `app/liveness_engine.py`.
+   hentikan rollout dan cek kembali kontrak model (ukuran input, crop scale,
+   urutan channel BGR/RGB, dan index kelas output). Service akan menolak model
+   yang shape input/output-nya tidak cocok, tetapi tidak dapat menebak label
+   model custom yang dokumentasinya tidak lengkap.
+
+## Test dataset
+
+Repository ini tidak membawa dataset wajah live/spoof. Test unit untuk
+normalisasi, mapping kelas 2/3, dan keputusan threshold dapat dijalankan tanpa
+bobot model:
+
+```bash
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+Untuk uji foto nyata, sediakan folder dengan struktur `live/` dan `spoof/`,
+lalu jalankan test opsional dengan `LIVENESS_TEST_DATASET_DIR` setelah model
+dan dependency service terpasang. Ambang `0.5` hanyalah default awal dan
+harus dikalibrasi pada data kamera/populasi yang benar-benar digunakan.
+
+MiniFASNet adalah passive presentation-attack detector, bukan jaminan
+keamanan 100% dan bukan pengganti evaluasi anti-spoofing formal. Foto cetak,
+layar, video, pencahayaan, kamera, dan serangan baru dapat menghasilkan
+false accept/false reject.
 
 ## Kenapa bukan yang dari `anti-spoofing-fr`
 

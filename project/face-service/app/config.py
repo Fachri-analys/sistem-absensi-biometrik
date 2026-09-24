@@ -24,7 +24,18 @@ class Settings(BaseSettings):
     # karena file model biner sebaiknya diverifikasi/didownload sendiri oleh
     # deployer, bukan diikutsertakan mentah-mentah di kode sumber.
     liveness_model_path: str = "./models/minifasnet.onnx"
-    liveness_input_size: int = 80  # sesuaikan dengan model yang dipakai — lihat models/README.md
+    liveness_input_size: int = 80  # harus cocok dengan dimensi input ONNX
+    # Kontrak preprocessing model. Default cocok dengan upstream
+    # 2.7_80x80_MiniFASNetV2 (BGR, 3 kelas, class 1 = live).
+    liveness_input_color_order: str = "BGR"
+    liveness_crop_scale: float = 2.7
+    # Tidak semua varian MiniFASNet memiliki urutan kelas yang sama. Wajib
+    # diisi eksplisit agar service tidak menebak dan menukar live/spoof.
+    # Upstream 3-kelas biasanya 1; model 2-kelas custom harus mengikuti
+    # label model (contoh umum: 0 = real/live).
+    liveness_expected_class_count: int = 3
+    liveness_live_class_index: int | None = None
+    liveness_threshold: float = 0.5
 
     # InsightFace: nama model buffalo_l otomatis download ke ~/.insightface
     # saat pertama kali dipakai (lihat docs/README.md face-service).

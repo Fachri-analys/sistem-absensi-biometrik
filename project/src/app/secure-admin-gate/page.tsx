@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { Mail, Lock, Eye, EyeOff, ShieldCheck, AlertCircle, ArrowRight } from 'lucide-react';
 import { OFFICIAL_SCHOOL_DOMAIN } from '@/lib/auth-security';
@@ -58,11 +59,13 @@ export default function SecureAdminGatePage() {
       <div className="lg:w-[48%] bg-gradient-to-br from-[#1864da] via-[#1552b5] to-[#0f3d8a] text-white p-8 lg:p-16 flex flex-col justify-between relative overflow-hidden shrink-0">
         {/* Top Header */}
         <div className="relative z-10 flex items-center gap-4">
-          <div className="w-14 h-14 flex items-center justify-center shrink-0 drop-shadow-[0_4px_14px_rgba(0,0,0,0.3)]">
-            <img
+          <div className="w-14 h-14 relative flex items-center justify-center shrink-0 drop-shadow-[0_4px_14px_rgba(0,0,0,0.3)]">
+            <Image
               src="/images/logo-smkn11.webp"
-              srcSet="/images/logo-smkn11.webp 1x, /images/logo-smkn11-hd.webp 2x"
               alt="Logo SMKN 11 Jakarta"
+              width={56}
+              height={56}
+              priority
               className="w-full h-full object-contain filter drop-shadow hover:scale-105 transition-transform"
             />
           </div>

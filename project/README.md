@@ -44,6 +44,11 @@ Minimal untuk development:
 nilai contoh. Object Storage diperlukan untuk fitur yang menyimpan foto
 enrolment sementara atau laporan; lihat komentar di `.env.example`.
 
+Untuk presensi multi-frame, `NEXT_PUBLIC_CHECKIN_FRAME_COUNT` mengatur jumlah
+frame yang diambil browser dan `CHECKIN_MIN_CONSISTENT_FRAMES` mengatur quorum
+identity+liveness. Keduanya dapat diubah lewat environment tanpa mengubah
+source code; nilai pertama harus minimal sama dengan nilai kedua.
+
 ## 4. Jalankan dependency lokal
 
 Dari folder `project/`:

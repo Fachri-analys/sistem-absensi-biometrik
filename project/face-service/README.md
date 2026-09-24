@@ -37,6 +37,13 @@ curl http://localhost:8000/ready           # cek model liveness terpasang
 
 ## Alur presensi
 
+Untuk jalur check-in HP, browser mengambil beberapa frame dari stream kamera
+(jumlahnya diatur oleh `NEXT_PUBLIC_CHECKIN_FRAME_COUNT`). Server melakukan
+quality filtering dan recognition per frame, lalu mensyaratkan identitas yang
+cocok minimal `CHECKIN_MIN_CONSISTENT_FRAMES` kali sebelum menjalankan liveness
+pada frame-frame tersebut. Endpoint frontend tetap sama; beberapa frame dikirim
+sebagai beberapa field multipart `photo` dengan nama yang sama.
+
 Presensi melewati tahap terpisah berikut di server:
 
 ```text
@@ -50,6 +57,11 @@ face detection
 Liveness tidak mempercayai flag dari browser dan tidak diimplementasikan
 sebagai mock yang selalu `true`. Jika model tidak ada, kontraknya salah, atau
 inference gagal, hasilnya fail-closed (`passed: false`).
+
+Attendance hanya dibuat setelah quorum identity dan liveness terpenuhi.
+Constraint database `studentId + attendanceDate` menjadi pengaman terakhir
+terhadap race condition dan duplicate attendance pada hari/sesi sekolah yang
+sama.
 
 ## Yang SUDAH diverifikasi jalan (bukan sekadar ditulis)
 

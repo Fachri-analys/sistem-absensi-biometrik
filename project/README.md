@@ -99,7 +99,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Isi `INTERNAL_SERVICE_KEY` dan `EMBEDDING_ENCRYPTION_KEY` di
-`face-service/.env`, lalu pasang model liveness sesuai
+`face-service/.env`, lalu pasang model YOLO face dan model liveness sesuai
 [`face-service/models/README.md`](face-service/models/README.md).
 Verifikasi:
 

@@ -25,6 +25,7 @@ except ImportError:  # pragma: no cover
     FaceAnalysis = None  # type: ignore
 
 from .config import settings
+from .yolo_face_detector import YoloDetectorNotReadyError, YoloFaceDetector
 
 logger = logging.getLogger("face_engine")
 
@@ -41,10 +42,31 @@ class DetectedFace:
     bbox: tuple[float, float, float, float]
 
 
+class FaceModelNotReadyError(RuntimeError):
+    """Raised when a required face model is not available for inference."""
+
+
 class FaceEngine:
     """Singleton wrapper — model InsightFace di-load SEKALI saat startup, dipakai ulang di semua request."""
 
-    def __init__(self, app: FaceAnalysis | None = None) -> None:
+    def __init__(self, app: FaceAnalysis | None = None, detector: YoloFaceDetector | None = None) -> None:
+        # Existing tests can inject only the InsightFace-like app. Production
+        # instances use YOLO as the explicit primary face detector.
+        self._detector = detector
+        if self._detector is None and app is None:
+            self._detector = YoloFaceDetector(
+                model_path=settings.yolo_face_model_path,
+                input_size=settings.yolo_input_size,
+                confidence_threshold=settings.yolo_confidence_threshold,
+                iou_threshold=settings.yolo_iou_threshold,
+                face_class_id=settings.yolo_face_class_id,
+                class_count=settings.yolo_class_count,
+                has_objectness=settings.yolo_has_objectness,
+                normalized_output=settings.yolo_normalized_output,
+                box_format=settings.yolo_box_format,
+                max_detections=settings.yolo_max_detections,
+            )
+
         if app is not None:
             self._app = app
         elif FaceAnalysis is not None:
@@ -58,6 +80,37 @@ class FaceEngine:
         else:
             logger.warning("InsightFace belum terpasang. FaceEngine menunggu inisialisasi model.")
             self._app = None
+
+    @property
+    def detector_ready(self) -> bool:
+        """Whether the configured primary detector can serve requests."""
+        return self._detector is None or self._detector.is_ready
+
+    @property
+    def insightface_ready(self) -> bool:
+        return self._app is not None
+
+    @property
+    def is_ready(self) -> bool:
+        return self.insightface_ready and self.detector_ready
+
+    def detect_primary_faces(self, image_bgr: np.ndarray) -> list[tuple[float, float, float, float]]:
+        """Return bboxes from the configured primary detector.
+
+        Liveness uses this method so it cannot silently bypass the YOLO gate
+        and call InsightFace's internal detector directly.
+        """
+        if self._detector is not None:
+            try:
+                return [detection.bbox for detection in self._detector.detect(image_bgr)]
+            except YoloDetectorNotReadyError as exc:
+                raise FaceModelNotReadyError(str(exc)) from exc
+            except (ValueError, RuntimeError) as exc:
+                raise FaceModelNotReadyError("Inferensi model YOLO gagal.") from exc
+
+        if self._app is None:
+            raise FaceModelNotReadyError("Model face belum diinisialisasi.")
+        return [tuple(float(value) for value in face.bbox) for face in self._app.get(image_bgr)]
 
     def _decode_image(self, image_bytes: bytes) -> np.ndarray:
         if not image_bytes:
@@ -100,9 +153,21 @@ class FaceEngine:
             return None, QualityResult(is_valid=False, reason="poor_lighting")
 
         if self._app is None:
-            raise RuntimeError("InsightFace model belum diinisialisasi.")
+            raise FaceModelNotReadyError("Model InsightFace belum diinisialisasi.")
 
-        # Detection is the next gate after basic image-quality checks.
+        # YOLO is the primary detector in production. InsightFace is still
+        # called once to obtain the aligned embedding and facial landmarks;
+        # its result must agree with the YOLO box before recognition proceeds.
+        primary_faces = self.detect_primary_faces(img)
+        if len(primary_faces) == 0:
+            return None, QualityResult(is_valid=False, reason="no_face")
+        if len(primary_faces) > 1:
+            return None, QualityResult(is_valid=False, reason="multiple_faces")
+        primary_bbox = primary_faces[0]
+
+        if self._app is None:
+            raise FaceModelNotReadyError("Model InsightFace belum diinisialisasi.")
+
         faces = self._app.get(img)
         if len(faces) == 0:
             return None, QualityResult(is_valid=False, reason="no_face")
@@ -110,7 +175,11 @@ class FaceEngine:
             return None, QualityResult(is_valid=False, reason="multiple_faces")
 
         face = faces[0]
-        x1, y1, x2, y2 = face.bbox
+        insight_bbox = tuple(float(value) for value in face.bbox)
+        if self._detector is not None and self._bbox_iou(primary_bbox, insight_bbox) < settings.yolo_embedding_iou_threshold:
+            return None, QualityResult(is_valid=False, reason="face_detector_mismatch")
+
+        x1, y1, x2, y2 = primary_bbox
         face_w = float(x2 - x1)
         face_h = float(y2 - y1)
         if face_w < settings.min_face_size or face_h < settings.min_face_size:
@@ -150,8 +219,25 @@ class FaceEngine:
         elif normed_emb is not None:
             normed_emb = FaceEngine.safe_l2_normalize(normed_emb)
 
-        detected = DetectedFace(embedding=normed_emb, bbox=tuple(face.bbox))
+        detected = DetectedFace(embedding=normed_emb, bbox=primary_bbox)
         return detected, QualityResult(is_valid=True, reason=None)
+
+    @staticmethod
+    def _bbox_iou(
+        box_a: tuple[float, float, float, float],
+        box_b: tuple[float, float, float, float],
+    ) -> float:
+        ax1, ay1, ax2, ay2 = box_a
+        bx1, by1, bx2, by2 = box_b
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        intersection = max(0.0, inter_x2 - inter_x1) * max(0.0, inter_y2 - inter_y1)
+        area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+        area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+        union = area_a + area_b - intersection
+        return intersection / union if union > 0.0 else 0.0
 
     def check_quality(self, image_bytes: bytes) -> QualityResult:
         """

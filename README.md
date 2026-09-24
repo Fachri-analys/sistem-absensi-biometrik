@@ -41,7 +41,7 @@ kecocokan wajah dengan template enrolment.
   dan endpoint check-in.
 - **Worker:** proses terpisah yang membaca queue BullMQ dari Redis.
 - **PostgreSQL:** source of truth untuk siswa, kelas, presensi, dan konfigurasi.
-- **Face Service:** Python + InsightFace + MiniFASNet, dipanggil APP melalui
+- **Face Service:** Python + YOLO face detector + InsightFace + MiniFASNet, dipanggil APP melalui
   jaringan internal dan tidak boleh diekspos langsung ke browser.
 - **Redis:** cache, rate limit, dan backend queue.
 

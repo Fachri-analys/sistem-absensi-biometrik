@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, sta
 from fastapi.responses import JSONResponse
 
 from .config import settings
-from .face_engine import face_engine
+from .face_engine import FaceModelNotReadyError, face_engine
 from .liveness_engine import liveness_engine
 from .schemas import (
     CompareRequest,
@@ -67,10 +67,11 @@ async def ready() -> JSONResponse:
     project Next.js, prinsip yang sama diterapkan di sini).
     """
     checks = {
-        "insightface": "ok",  # kalau modul ini berhasil diimpor, InsightFace sudah ter-load (lihat face_engine.py)
+        "yolo_detector": "ok" if face_engine.detector_ready else "not_configured",
+        "insightface": "ok" if face_engine.insightface_ready else "not_configured",
         "liveness_model": "ok" if liveness_engine.is_ready() else "not_configured",
     }
-    is_ready = checks["liveness_model"] == "ok"
+    is_ready = all(value == "ok" for value in checks.values())
     return JSONResponse(
         content={"status": "ready" if is_ready else "not_ready", "checks": checks},
         status_code=200 if is_ready else 503,
@@ -88,6 +89,8 @@ async def check_quality(photo: UploadFile = File(...)) -> QualityResponse:
     data = await _read_upload(photo)
     try:
         result = face_engine.check_quality(data)
+    except FaceModelNotReadyError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return QualityResponse(is_valid=result.is_valid, reason=result.reason)
@@ -127,7 +130,10 @@ async def generate_embedding(photo: UploadFile = File(...)) -> EmbeddingResponse
     memastikan wajah layak diproses. Jika tidak layak, kembalikan HTTP 422 dengan reason jelas.
     """
     data = await _read_upload(photo)
-    detected, quality = face_engine.extract_face_with_quality(data)
+    try:
+        detected, quality = face_engine.extract_face_with_quality(data)
+    except FaceModelNotReadyError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
     if not quality.is_valid or detected is None:
         raise HTTPException(
@@ -154,7 +160,10 @@ async def generate_enrollment_embedding(photos: list[UploadFile] = File(...)) ->
     vectors: list[list[float]] = []
     for i, photo in enumerate(photos):
         data = await _read_upload(photo)
-        detected, quality = face_engine.extract_face_with_quality(data)
+        try:
+            detected, quality = face_engine.extract_face_with_quality(data)
+        except FaceModelNotReadyError as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
         if not quality.is_valid or detected is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

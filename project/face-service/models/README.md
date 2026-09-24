@@ -4,6 +4,30 @@ File model biner (~1-5MB) **sengaja tidak di-bundle** di repo ini — file
 biner besar sebaiknya diverifikasi & didownload sendiri oleh yang deploy,
 bukan diikutkan mentah-mentah di source control.
 
+## Model face detection YOLO
+
+Face-service menggunakan model YOLO khusus deteksi wajah dalam format ONNX
+sebagai detector utama. Model YOLO umum untuk object/person detection tidak
+boleh dipakai sebagai pengganti model face detector karena class dan perilaku
+bounding box-nya berbeda.
+
+Sediakan weight terverifikasi di `./models/yolo-face.onnx` atau ubah
+`YOLO_FACE_MODEL_PATH`. Kontrak default model:
+
+- input `float32`, NCHW, RGB, ukuran `640x640`, nilai `[0, 1]`;
+- output box ter-decode dengan format `cx, cy, width, height` relatif terhadap
+  canvas letterbox, diikuti satu score class face;
+- `YOLO_CLASS_COUNT=1`, `YOLO_FACE_CLASS_ID=0`, dan
+  `YOLO_HAS_OBJECTNESS=false`.
+
+Jika model hasil export memakai objectness YOLOv5, set
+`YOLO_HAS_OBJECTNESS=true`. Jika output box ternormalisasi, set
+`YOLO_NORMALIZED_OUTPUT=true`. Jangan mengubah mapping/format ini tanpa
+memeriksa metadata export dan menguji foto wajah valid, tidak ada wajah, serta
+lebih dari satu wajah. Service akan mengembalikan not-ready jika weight YOLO
+atau runtime ONNX belum tersedia; tidak ada fallback diam-diam ke detector
+lain.
+
 ## Cara mendapatkan
 
 Pilih SALAH SATU sumber berikut (semua open-source, arsitektur MiniFASNet

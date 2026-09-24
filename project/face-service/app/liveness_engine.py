@@ -40,7 +40,7 @@ import numpy as np
 import onnxruntime as ort
 
 from .config import settings
-from .face_engine import face_engine
+from .face_engine import FaceModelNotReadyError, face_engine
 from .liveness_processing import classify_logits, prepare_input
 
 logger = logging.getLogger("liveness_engine")
@@ -275,21 +275,22 @@ class LivenessEngine:
 
             # Deteksi wajah dan ambil patch square berskala. Liveness tetap
             # menjadi tahap terpisah; endpoint ini tidak membuat embedding.
-            faces = face_engine._app.get(img)  # noqa: SLF001 — detector bersama service
+            faces = face_engine.detect_primary_faces(img)
             if len(faces) == 0:
                 return LivenessResult(passed=False, confidence=0.0, reason="NO_FACE_DETECTED")
             if len(faces) > 1:
                 return LivenessResult(passed=False, confidence=0.0, reason="MULTIPLE_FACES")
 
-            crop = self._crop_face(img, faces[0].bbox)
+            crop = self._crop_face(img, faces[0])
             tensor = prepare_input(
                 crop,
                 size=self._input_size,
                 color_order=settings.liveness_input_color_order,
             )
-        except ValueError:
+        except (FaceModelNotReadyError, ValueError) as exc:
             logger.warning("Input liveness tidak valid", exc_info=True)
-            return LivenessResult(passed=False, confidence=0.0, reason="INVALID_IMAGE")
+            reason = "MODEL_NOT_CONFIGURED" if isinstance(exc, FaceModelNotReadyError) else "INVALID_IMAGE"
+            return LivenessResult(passed=False, confidence=0.0, reason=reason)
 
         try:
             outputs = self._session.run(None, {self._input_name: tensor})

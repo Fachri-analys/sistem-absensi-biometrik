@@ -55,6 +55,20 @@ class Settings(BaseSettings):
     # saat pertama kali dipakai (lihat docs/README.md face-service).
     insightface_model_name: str = "buffalo_l"
 
+    # YOLO face detector. Weight ONNX wajib diprovision oleh deployment dan
+    # tidak boleh didownload diam-diam saat request pertama.
+    yolo_face_model_path: str = "./models/yolo-face.onnx"
+    yolo_input_size: int = 640
+    yolo_confidence_threshold: float = 0.50
+    yolo_iou_threshold: float = 0.45
+    yolo_face_class_id: int | None = 0
+    yolo_class_count: int = 1
+    yolo_has_objectness: bool = False
+    yolo_normalized_output: bool = False
+    yolo_box_format: str = "cxcywh"
+    yolo_max_detections: int = 20
+    yolo_embedding_iou_threshold: float = 0.20
+
     # Threshold kecocokan cosine similarity raw (ArcFace standard ~0.40)
     # Dapat dikonfigurasi melalui MATCH_THRESHOLD atau MATCH_THRESHOLD_DEFAULT di .env
     match_threshold: float = 0.40

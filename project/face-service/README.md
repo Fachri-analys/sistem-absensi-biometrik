@@ -1,6 +1,6 @@
 # Face Service
 
-Microservice Python internal untuk face embedding (InsightFace buffalo_l)
+Microservice Python internal untuk face detection (YOLO ONNX) dan face embedding (InsightFace buffalo_l)
 dan liveness detection (MiniFASNet ONNX) — dipanggil oleh APP Next.js
 (`src/lib/face-recognition.ts`, implementasi `HttpFaceRecognitionEngine`),
 **tidak pernah diekspos langsung ke internet/siswa**.
@@ -20,19 +20,21 @@ cp .env.example .env
 # isi INTERNAL_SERVICE_KEY dan EMBEDDING_ENCRYPTION_KEY (lihat komentar di .env.example)
 
 # WAJIB sebelum dipakai presensi sungguhan — lihat models/README.md
-# (file model liveness tidak di-bundle, harus didownload terpisah)
+# (file model YOLO face dan liveness tidak di-bundle, harus dipasang terpisah)
 
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 Model InsightFace (buffalo_l) otomatis terdownload ke `~/.insightface/` saat
-pertama kali dijalankan (butuh koneksi internet sekali, lalu ter-cache).
+pertama kali dijalankan (butuh koneksi internet sekali, lalu ter-cache). Model
+YOLO face dan MiniFASNet tidak didownload saat runtime; keduanya wajib
+dipasang dan diverifikasi oleh deployment.
 
 ## Verifikasi jalan dengan benar
 
 ```bash
 curl http://localhost:8000/health          # {"status": "ok"}
-curl http://localhost:8000/ready           # cek model liveness terpasang
+curl http://localhost:8000/ready           # cek YOLO, InsightFace, dan liveness siap
 ```
 
 ## Alur presensi
@@ -63,19 +65,20 @@ Constraint database `studentId + attendanceDate` menjadi pengaman terakhir
 terhadap race condition dan duplicate attendance pada hari/sesi sekolah yang
 sama.
 
-## Yang SUDAH diverifikasi jalan (bukan sekadar ditulis)
+## Yang SUDAH diverifikasi di repository
 
-Selama pengembangan, alur berikut diuji end-to-end dengan foto wajah asli
-(bukan cuma dites secara teori):
-- Deteksi wajah + validasi kualitas (`/v1/quality`)
-- Generate embedding + enkripsi (`/v1/embedding`)
-- Dekripsi + perbandingan cosine similarity (`/v1/compare`) — foto yang
-  sama dengan dirinya sendiri menghasilkan similarity 1.0, sesuai ekspektasi
-- Autentikasi shared-secret (401 tanpa header yang benar)
+Tanpa weight model dan dataset nyata, yang dapat diverifikasi di lingkungan
+ini adalah kontrak kode dan test terisolasi:
+- preprocessing YOLO: BGR ke RGB, float32 NCHW, letterbox, dan koordinat box;
+- confidence filtering, class mapping, dan NMS YOLO;
+- YOLO sebagai primary gate sebelum embedding InsightFace;
+- quality check, normalisasi embedding, mapping liveness, dan fail-closed;
+- autentikasi shared-secret dan test frontend yang tersedia.
 
 ## Yang BELUM diverifikasi — WAJIB dicek sebelum produksi
 
-- **Liveness detection (`/v1/liveness`) belum diuji dengan bobot model & foto
+- **YOLO face detection dan liveness detection (`/v1/liveness`) belum diuji
+  dengan bobot model & foto
   asli di repository ini** — file bobot dan dataset pengujian tidak tersedia
   di lingkungan pengembangan.
   Lihat `models/README.md` untuk cara memasang dan mengujinya sendiri

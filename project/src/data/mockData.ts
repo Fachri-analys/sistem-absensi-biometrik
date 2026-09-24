@@ -1,40 +1,5 @@
-export interface Student {
-  id: string;
-  no: number;
-  nama: string;
-  nis: string;
-  kelas: string;
-  jurusan: string;
-  jenisKelamin: 'Laki-laki' | 'Perempuan';
-  statusAkademik: 'Aktif' | 'Tidak Aktif';
-  statusHariIni: 'Tepat Waktu' | 'Terlambat' | 'Izin (Sakit)' | 'Izin' | 'Alpha';
-  waktuMasuk?: string;
-  keterangan?: string;
-  avatarInitials: string;
-  avatarBg?: string;
-}
-
-export interface Teacher {
-  id: string;
-  no: number;
-  namaLengkap: string;
-  nip: string;
-  mataPelajaran: string;
-  kelasWali: string;
-  status: 'Aktif' | 'Cuti';
-  avatarInitials: string;
-  avatarBg?: string;
-  email: string;
-  telepon: string;
-}
-
-export interface AttendanceLog {
-  tanggal: string;
-  hari: string;
-  waktuMasuk: string;
-  status: 'Tepat Waktu' | 'Terlambat' | 'Izin' | 'Alpha';
-  keterangan: string;
-}
+import type { Student, Teacher, AttendanceLog } from '@/types';
+export type { Student, Teacher, AttendanceLog };
 
 export const CURRENT_STUDENT = {
   nama: "Raka Pratama",

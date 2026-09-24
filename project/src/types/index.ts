@@ -54,26 +54,3 @@ export interface AttendanceLog {
   keterangan: string;
 }
 
-export interface AdminUser {
-  nama: string;
-  role: string;
-  initials: string;
-}
-
-export interface ClassSummary {
-  kelas: string;
-  totalSiswa: number;
-  hadir: number;
-  terlambat: number;
-  izin: number;
-  alpha: number;
-  persentase: string;
-}
-
-export interface ClassReport {
-  kelas: string;
-  totalSiswa: number;
-  rataHadir: string;
-  terlambat: string;
-  alpha: string;
-}

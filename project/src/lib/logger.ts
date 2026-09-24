@@ -30,7 +30,7 @@ export const logger = pino({
     censor: "[REDACTED]",
   },
   transport:
-    env.NODE_ENV === "development"
+    process.env.ENABLE_PINO_PRETTY === "true"
       ? { target: "pino-pretty", options: { colorize: true } }
       : undefined,
 });

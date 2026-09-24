@@ -8,10 +8,17 @@ import { Errors } from "./api-errors";
  * duplikasi validasi manual di dalam route handler.
  */
 
-export const loginSchema = z.object({
-  email: z.string().email("Format email tidak valid."),
-  password: z.string().min(1, "Password wajib diisi."),
-});
+export const loginSchema = z
+  .object({
+    email: z.string().email("Format email tidak valid.").optional(),
+    identifier: z.string().trim().min(1, "NISN, NIP, atau Email wajib diisi.").optional(),
+    password: z.string().min(1, "Password wajib diisi."),
+    role: z.enum(["siswa", "guru", "admin"]).optional(),
+  })
+  .refine((data) => Boolean(data.email || data.identifier), {
+    message: "Email atau identifier wajib diisi.",
+    path: ["identifier"],
+  });
 
 export const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),

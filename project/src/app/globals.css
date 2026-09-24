@@ -1,4 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 :root {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+
+  /* Legacy Prototype Variables */
   --primary: #2563eb;
   --primary-hover: #1d4ed8;
   --primary-light: #eff6ff;
@@ -18,22 +26,71 @@
   --radius: 12px;
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background-color: var(--bg-main);
-  color: var(--text-main);
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
+  color: var(--foreground);
+  background: var(--background);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  overflow-x: hidden;
 }
 
-/* Header & Nav */
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+@keyframes scanline {
+  0% {
+    top: 5%;
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    top: 92%;
+    opacity: 0.8;
+  }
+}
+
+.animate-scanline {
+  animation: scanline 2.5s ease-in-out infinite alternate;
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 10px rgba(34, 197, 94, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
+}
+
+.pulse-active {
+  animation: pulse-ring 2s infinite;
+}
+
+/* Legacy Header & Nav (used in checkin / raw dashboard) */
 .navbar {
   background: var(--card-bg);
   border-bottom: 1px solid var(--border);
@@ -73,7 +130,7 @@ body {
   background: var(--primary-light);
 }
 
-/* Main Container */
+/* Legacy Main Container */
 .container {
   max-width: 1000px;
   margin: 0 auto;
@@ -82,7 +139,7 @@ body {
   flex: 1;
 }
 
-/* Card */
+/* Legacy Card */
 .card {
   background: var(--card-bg);
   border-radius: var(--radius);
@@ -104,7 +161,7 @@ body {
   margin-bottom: 1.25rem;
 }
 
-/* Forms */
+/* Legacy Forms */
 .form-group {
   margin-bottom: 1.25rem;
 }
@@ -131,7 +188,7 @@ body {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
 }
 
-/* Buttons */
+/* Legacy Buttons */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -192,7 +249,7 @@ body {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform: scaleX(-1); /* mirror selfie */
+  transform: scaleX(-1);
 }
 
 .camera-overlay {
@@ -349,7 +406,6 @@ body {
   background: #f8fafc;
 }
 
-/* Responsive */
 @media (max-width: 640px) {
   .container {
     padding: 1rem;

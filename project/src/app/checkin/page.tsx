@@ -8,13 +8,23 @@ interface CheckinSuccessData {
   studentName: string;
 }
 
+const CHECKIN_FRAME_COUNT = Math.max(
+  1,
+  Math.min(10, Number.parseInt(process.env.NEXT_PUBLIC_CHECKIN_FRAME_COUNT ?? "5", 10) || 5)
+);
+const CHECKIN_FRAME_INTERVAL_MS = Math.max(
+  0,
+  Math.min(2000, Number.parseInt(process.env.NEXT_PUBLIC_CHECKIN_FRAME_INTERVAL_MS ?? "150", 10) || 0)
+);
+
 export default function CheckinPage() {
   const [nisn, setNisn] = useState("");
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isCapturing, setIsCapturing] = useState(false);
   const [capturedPhotoUrl, setCapturedPhotoUrl] = useState<string | null>(null);
-  const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null);
+  const [capturedBlobs, setCapturedBlobs] = useState<Blob[]>([]);
   const [result, setResult] = useState<{
     success: boolean;
     title: string;
@@ -69,33 +79,55 @@ export default function CheckinPage() {
     };
   }, [startCamera, stopCamera]);
 
-  // Ambil gambar dari video stream
-  const capturePhoto = () => {
-    if (!videoRef.current || !canvasRef.current) return;
+  // Ambil beberapa frame dari video stream agar recognition tidak bergantung
+  // pada satu frame yang mungkin blur/tertutup/berubah pencahayaan.
+  const capturePhoto = async () => {
+    if (!videoRef.current || !canvasRef.current || isCapturing) return;
+
     const video = videoRef.current;
     const canvas = canvasRef.current;
     canvas.width = video.videoWidth || 640;
     canvas.height = video.videoHeight || 480;
-
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Flip horizontal agar tidak terbalik (karena cermin selfie)
-    ctx.translate(canvas.width, 0);
-    ctx.scale(-1, 1);
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const captureOneFrame = () =>
+      new Promise<Blob>((resolve, reject) => {
+        // Reset transform because the same canvas is reused for every frame.
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Flip horizontal agar tidak terbalik (karena cermin selfie).
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(
+          (blob) => (blob ? resolve(blob) : reject(new Error("Gagal mengambil frame kamera."))),
+          "image/jpeg",
+          0.9
+        );
+      });
 
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) return;
-        setCapturedBlob(blob);
-        const url = URL.createObjectURL(blob);
-        setCapturedPhotoUrl(url);
-        stopCamera();
-      },
-      "image/jpeg",
-      0.9
-    );
+    setIsCapturing(true);
+    setCameraError(null);
+    try {
+      const frames: Blob[] = [];
+      for (let index = 0; index < CHECKIN_FRAME_COUNT; index += 1) {
+        frames.push(await captureOneFrame());
+        if (index < CHECKIN_FRAME_COUNT - 1 && CHECKIN_FRAME_INTERVAL_MS > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, CHECKIN_FRAME_INTERVAL_MS));
+        }
+      }
+      setCapturedBlobs(frames);
+      if (frames[0]) {
+        setCapturedPhotoUrl(URL.createObjectURL(frames[0]));
+      }
+      stopCamera();
+    } catch (err) {
+      console.error("Camera capture error:", err);
+      setCameraError("Gagal mengambil semua frame kamera. Silakan coba lagi.");
+    } finally {
+      setIsCapturing(false);
+    }
   };
 
   const retakePhoto = () => {
@@ -103,7 +135,7 @@ export default function CheckinPage() {
       URL.revokeObjectURL(capturedPhotoUrl);
     }
     setCapturedPhotoUrl(null);
-    setCapturedBlob(null);
+    setCapturedBlobs([]);
     setResult(null);
     startCamera();
   };
@@ -114,8 +146,8 @@ export default function CheckinPage() {
       alert("Masukkan 10 digit NISN yang valid.");
       return;
     }
-    if (!capturedBlob) {
-      alert("Silakan ambil foto wajah terlebih dahulu.");
+    if (capturedBlobs.length !== CHECKIN_FRAME_COUNT) {
+      alert(`Silakan ambil ${CHECKIN_FRAME_COUNT} frame wajah terlebih dahulu.`);
       return;
     }
 
@@ -125,7 +157,9 @@ export default function CheckinPage() {
     try {
       const formData = new FormData();
       formData.append("nisn", nisn.trim());
-      formData.append("photo", capturedBlob, "checkin.jpg");
+      capturedBlobs.forEach((blob, index) => {
+        formData.append("photo", blob, `checkin-${index + 1}.jpg`);
+      });
 
       const res = await fetch("/api/attendance/checkin", {
         method: "POST",
@@ -249,7 +283,8 @@ export default function CheckinPage() {
         <div className="card">
           <h1 className="card-title">Presensi Wajah Mandiri</h1>
           <p className="card-subtitle">
-            Posisikan wajah Anda tepat di dalam lingkaran dan pastikan pencahayaan cukup terang.
+            Posisikan wajah Anda tepat di dalam lingkaran. Sistem akan mengambil {CHECKIN_FRAME_COUNT} frame
+            untuk verifikasi yang lebih stabil.
           </p>
 
           <form onSubmit={handleSubmit}>
@@ -318,17 +353,17 @@ export default function CheckinPage() {
                   type="button"
                   onClick={capturePhoto}
                   className="btn btn-primary btn-full"
-                  disabled={!isCameraActive || isLoading}
+                  disabled={!isCameraActive || isLoading || isCapturing}
                 >
                   <span>📷</span>
-                  <span>Ambil Foto Wajah</span>
+                  <span>{isCapturing ? `Mengambil ${CHECKIN_FRAME_COUNT} frame...` : `Ambil ${CHECKIN_FRAME_COUNT} Frame Wajah`}</span>
                 </button>
               ) : (
                 <>
                   <button
                     type="submit"
                     className="btn btn-primary btn-full"
-                    disabled={isLoading || nisn.length !== 10}
+                    disabled={isLoading || nisn.length !== 10 || capturedBlobs.length !== CHECKIN_FRAME_COUNT}
                   >
                     {isLoading ? "Memverifikasi Wajah..." : "Kirim & Catat Kehadiran"}
                   </button>

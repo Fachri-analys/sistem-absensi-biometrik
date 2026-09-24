@@ -20,9 +20,9 @@ sebelum dipakai siswa sungguhan. Lihat models/README.md untuk cara
 mendapatkan file .onnx yang kompatibel dan cara mengujinya.
 
 PERBAIKAN v0.2.0:
-- FIX: Class index MiniFASNet dibalik — konvensi Silent-Face-Anti-Spoofing
-  adalah [0: Spoof, 1: Live, 2: Spoof] (3 kelas) atau [0: Spoof, 1: Live]
-  (2 kelas). Versi sebelumnya salah mengambil probs[0] sebagai live score.
+- FIX: Class index MiniFASNet dibuat eksplisit — kontrak upstream
+  3-kelas adalah [0: Spoof, 1: Live, 2: Spoof]. Model 2-kelas harus
+  mengatur `LIVENESS_LIVE_CLASS_INDEX` sesuai dokumentasi modelnya.
 - FIX: Output model ONNX adalah raw logits, BUKAN probabilitas. Ditambahkan
   softmax normalization sebelum thresholding.
 - FIX: Lazy loading — model bisa ditaruh setelah service jalan tanpa restart.
@@ -31,8 +31,9 @@ PERBAIKAN v0.2.0:
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
+from numbers import Integral
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -40,6 +41,7 @@ import onnxruntime as ort
 
 from .config import settings
 from .face_engine import face_engine
+from .liveness_processing import classify_logits, prepare_input
 
 logger = logging.getLogger("liveness_engine")
 
@@ -51,20 +53,82 @@ class LivenessResult:
     reason: str | None = None
 
 
-def _softmax(logits: np.ndarray) -> np.ndarray:
-    """Konversi raw logits ke probabilitas — WAJIB dilakukan karena model
-    MiniFASNet ONNX mengembalikan logits mentah, bukan probabilitas.
-    Tanpa ini, perbandingan terhadap threshold >= 0.5 tidak valid
-    (nilai bisa negatif atau > 1.0)."""
-    exp_logits = np.exp(logits - np.max(logits))  # numerically stable
-    return exp_logits / exp_logits.sum()
-
-
 class LivenessEngine:
     def __init__(self) -> None:
         self._session: ort.InferenceSession | None = None
         self._input_name: str = ""
+        self._input_size: int = settings.liveness_input_size
+        self._output_class_count: int | None = None
+        self._live_class_index: int | None = settings.liveness_live_class_index
         self._try_load_model()
+
+    @staticmethod
+    def _static_dimension(value: object) -> int | None:
+        return int(value) if isinstance(value, Integral) and int(value) > 0 else None
+
+    @staticmethod
+    def _model_path() -> Path:
+        configured = Path(settings.liveness_model_path).expanduser()
+        if configured.is_absolute():
+            return configured
+        # Relative model paths are relative to face-service, not the process
+        # working directory. This keeps /ready and lazy loading consistent
+        # when uvicorn is started from another directory.
+        return Path(__file__).resolve().parents[1] / configured
+
+    @staticmethod
+    def _crop_face(img: np.ndarray, bbox: object) -> np.ndarray:
+        """Create the square scale-aware patch expected by MiniFASNet.
+
+        The upstream 2.7_80x80 model is trained on a square patch expanded
+        around the detected face. Resizing a tight rectangular bbox directly
+        to a square distorts the face and changes the model contract.
+        """
+        coordinates = np.asarray(bbox, dtype=np.float32).reshape(-1)
+        if coordinates.size != 4 or not np.all(np.isfinite(coordinates)):
+            raise ValueError("Bounding box wajah tidak valid.")
+
+        x1, y1, x2, y2 = coordinates.tolist()
+        face_width = x2 - x1
+        face_height = y2 - y1
+        if face_width <= 0 or face_height <= 0:
+            raise ValueError("Bounding box wajah kosong.")
+
+        scale = float(settings.liveness_crop_scale)
+        if not np.isfinite(scale) or scale <= 0:
+            raise ValueError("Skala crop liveness harus lebih besar dari nol.")
+
+        crop_size = max(1, int(round(max(face_width, face_height) * scale)))
+        center_x = (x1 + x2) / 2.0
+        center_y = (y1 + y2) / 2.0
+        left = int(round(center_x - crop_size / 2.0))
+        top = int(round(center_y - crop_size / 2.0))
+        right = left + crop_size
+        bottom = top + crop_size
+
+        height, width = img.shape[:2]
+        pad_left = max(0, -left)
+        pad_top = max(0, -top)
+        pad_right = max(0, right - width)
+        pad_bottom = max(0, bottom - height)
+        if pad_left or pad_top or pad_right or pad_bottom:
+            img = cv2.copyMakeBorder(
+                img,
+                pad_top,
+                pad_bottom,
+                pad_left,
+                pad_right,
+                cv2.BORDER_REPLICATE,
+            )
+            left += pad_left
+            right += pad_left
+            top += pad_top
+            bottom += pad_top
+
+        crop = img[top:bottom, left:right]
+        if crop.shape[:2] != (crop_size, crop_size) or crop.size == 0:
+            raise ValueError("Gagal membuat crop wajah liveness.")
+        return crop
 
     def _try_load_model(self) -> bool:
         """Coba muat model ONNX. Mengembalikan True jika berhasil.
@@ -74,24 +138,108 @@ class LivenessEngine:
         if self._session is not None:
             return True
 
-        if not os.path.exists(settings.liveness_model_path):
+        model_path = self._model_path()
+        if not model_path.is_file():
             logger.warning(
                 "Model liveness tidak ditemukan di %s — endpoint /v1/liveness akan "
                 "menolak semua request sampai model dipasang. Lihat models/README.md.",
-                settings.liveness_model_path,
+                model_path,
             )
             return False
 
         try:
-            logger.info("Memuat model liveness dari %s...", settings.liveness_model_path)
-            self._session = ort.InferenceSession(
-                settings.liveness_model_path, providers=["CPUExecutionProvider"]
+            logger.info("Memuat model liveness dari %s...", model_path)
+            session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+            inputs = session.get_inputs()
+            outputs = session.get_outputs()
+            if len(inputs) != 1:
+                raise ValueError(f"Model harus memiliki tepat satu input, ditemukan {len(inputs)}.")
+            if len(outputs) != 1:
+                raise ValueError(f"Model harus memiliki tepat satu output, ditemukan {len(outputs)}.")
+
+            input_meta = inputs[0]
+            if input_meta.type != "tensor(float)":
+                raise ValueError(f"Tipe input model harus tensor(float), bukan {input_meta.type}.")
+            input_shape = list(input_meta.shape)
+            if len(input_shape) != 4:
+                raise ValueError(f"Input model harus NCHW 4D, shape={input_shape}.")
+
+            batch = self._static_dimension(input_shape[0])
+            channels = self._static_dimension(input_shape[1])
+            height = self._static_dimension(input_shape[2])
+            width = self._static_dimension(input_shape[3])
+            if batch is not None and batch != 1:
+                raise ValueError(f"Batch input model harus 1, shape={input_shape}.")
+            if channels is not None and channels != 3:
+                raise ValueError(f"Input model harus memiliki 3 channel, shape={input_shape}.")
+            if height is not None and width is not None and height != width:
+                raise ValueError(f"Input model harus square, shape={input_shape}.")
+
+            configured_size = int(settings.liveness_input_size)
+            if configured_size <= 0:
+                raise ValueError("LIVENESS_INPUT_SIZE harus lebih besar dari nol.")
+            model_size = height or width or configured_size
+            if height is not None and height != configured_size:
+                raise ValueError(
+                    "LIVENESS_INPUT_SIZE tidak cocok dengan model: "
+                    f"konfigurasi={configured_size}, model={height}."
+                )
+
+            color_order = settings.liveness_input_color_order.strip().upper()
+            if color_order not in {"BGR", "RGB"}:
+                raise ValueError("LIVENESS_INPUT_COLOR_ORDER harus BGR atau RGB.")
+            threshold = float(settings.liveness_threshold)
+            if not 0.0 <= threshold <= 1.0:
+                raise ValueError("LIVENESS_THRESHOLD harus berada pada rentang [0, 1].")
+            crop_scale = float(settings.liveness_crop_scale)
+            if not np.isfinite(crop_scale) or crop_scale <= 0:
+                raise ValueError("LIVENESS_CROP_SCALE harus lebih besar dari nol.")
+
+            expected_class_count = int(settings.liveness_expected_class_count)
+            if expected_class_count not in {2, 3}:
+                raise ValueError("LIVENESS_EXPECTED_CLASS_COUNT harus 2 atau 3.")
+
+            output_shape = list(outputs[0].shape)
+            output_class_count = None
+            static_output_dims = [self._static_dimension(dim) for dim in output_shape]
+            if static_output_dims and all(dim is not None for dim in static_output_dims):
+                output_class_count = int(np.prod(static_output_dims))
+                if output_class_count != expected_class_count:
+                    raise ValueError(
+                        "Jumlah kelas output model tidak sesuai konfigurasi: "
+                        f"konfigurasi={expected_class_count}, shape={output_shape}."
+                    )
+            if settings.liveness_live_class_index is None:
+                raise ValueError(
+                    "LIVENESS_LIVE_CLASS_INDEX wajib diisi; service tidak "
+                    "menebak mapping kelas model."
+                )
+            live_class_index = int(settings.liveness_live_class_index)
+            if not 0 <= live_class_index < expected_class_count:
+                raise ValueError(
+                    f"LIVENESS_LIVE_CLASS_INDEX={live_class_index} di luar "
+                    f"output {expected_class_count} kelas."
+                )
+
+            # Commit the session only after the complete contract is valid.
+            self._session = session
+            self._input_name = input_meta.name
+            self._input_size = model_size
+            self._output_class_count = expected_class_count
+            self._live_class_index = live_class_index
+            logger.info(
+                "Model liveness siap: input=%s, color=%s, output_classes=%s, "
+                "live_class=%s, threshold=%.3f, crop_scale=%.2f",
+                input_shape,
+                color_order,
+                expected_class_count,
+                live_class_index,
+                threshold,
+                crop_scale,
             )
-            self._input_name = self._session.get_inputs()[0].name
-            logger.info("Model liveness siap.")
             return True
         except Exception:
-            logger.exception("Gagal memuat model liveness dari %s", settings.liveness_model_path)
+            logger.exception("Gagal memuat model liveness dari %s", model_path)
             self._session = None
             return False
 
@@ -103,6 +251,8 @@ class LivenessEngine:
         file model baru ditaruh di path yang dikonfigurasi."""
         self._session = None
         self._input_name = ""
+        self._output_class_count = None
+        self._live_class_index = settings.liveness_live_class_index
         return self._try_load_model()
 
     def check(self, image_bytes: bytes) -> LivenessResult:
@@ -117,77 +267,64 @@ class LivenessEngine:
             # tidak ada perlindungan anti-spoof sama sekali).
             return LivenessResult(passed=False, confidence=0.0, reason="MODEL_NOT_CONFIGURED")
 
-        arr = np.frombuffer(image_bytes, dtype=np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img is None:
-            return LivenessResult(passed=False, confidence=0.0, reason="NO_FACE_DETECTED")
+        try:
+            arr = np.frombuffer(image_bytes, dtype=np.uint8)
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if img is None:
+                return LivenessResult(passed=False, confidence=0.0, reason="INVALID_IMAGE")
 
-        # Deteksi wajah dulu (pakai InsightFace yang sudah ada) untuk
-        # mendapatkan bounding box — MiniFASNet butuh CROP wajah, bukan
-        # seluruh foto, sesuai cara kerja aslinya (lihat referensi di
-        # docstring modul ini: "patch based on face detector bounding box").
-        faces = face_engine._app.get(img)  # noqa: SLF001 — dipakai internal, satu proses yang sama
-        if len(faces) != 1:
-            return LivenessResult(passed=False, confidence=0.0, reason="NO_FACE_DETECTED")
+            # Deteksi wajah dan ambil patch square berskala. Liveness tetap
+            # menjadi tahap terpisah; endpoint ini tidak membuat embedding.
+            faces = face_engine._app.get(img)  # noqa: SLF001 — detector bersama service
+            if len(faces) == 0:
+                return LivenessResult(passed=False, confidence=0.0, reason="NO_FACE_DETECTED")
+            if len(faces) > 1:
+                return LivenessResult(passed=False, confidence=0.0, reason="MULTIPLE_FACES")
 
-        x1, y1, x2, y2 = [int(v) for v in faces[0].bbox]
-        # Perbesar sedikit area crop di sekitar wajah (umum dilakukan di
-        # pipeline anti-spoofing — memberi model konteks tepi wajah, bukan
-        # cuma area dalam wajah persis) — faktor 1.2 adalah nilai wajar umum,
-        # SESUAIKAN kalau model .onnx yang dipasang punya rekomendasi
-        # preprocessing berbeda (lihat models/README.md).
-        pad_x = int((x2 - x1) * 0.1)
-        pad_y = int((y2 - y1) * 0.1)
-        h, w = img.shape[:2]
-        crop = img[max(0, y1 - pad_y): min(h, y2 + pad_y), max(0, x1 - pad_x): min(w, x2 + pad_x)]
+            crop = self._crop_face(img, faces[0].bbox)
+            tensor = prepare_input(
+                crop,
+                size=self._input_size,
+                color_order=settings.liveness_input_color_order,
+            )
+        except ValueError:
+            logger.warning("Input liveness tidak valid", exc_info=True)
+            return LivenessResult(passed=False, confidence=0.0, reason="INVALID_IMAGE")
 
-        if crop.size == 0:
-            return LivenessResult(passed=False, confidence=0.0, reason="NO_FACE_DETECTED")
-
-        size = settings.liveness_input_size
-        resized = cv2.resize(crop, (size, size))
-        # Normalisasi [0, 1], BGR (OpenCV default, TIDAK dikonversi ke RGB —
-        # ikuti urutan channel yang didokumentasikan model ONNX yang dipasang;
-        # ganti ke cv2.cvtColor(..., COLOR_BGR2RGB) di sini kalau model yang
-        # kamu pasang justru mengharapkan RGB. lihat models/README.md.
-        normalized = resized.astype(np.float32) / 255.0
-        # NCHW: (1, 3, H, W)
-        tensor = np.transpose(normalized, (2, 0, 1))[np.newaxis, ...]
-
-        outputs = self._session.run(None, {self._input_name: tensor})
-        raw_logits = outputs[0][0]
-
-        # PERBAIKAN KRITIS: Terapkan softmax untuk mengubah raw logits menjadi
-        # probabilitas. Model ONNX MiniFASNet mengembalikan logits mentah,
-        # BUKAN probabilitas — tanpa softmax, nilai bisa negatif atau > 1.0
-        # dan perbandingan terhadap threshold tidak valid.
-        probs = _softmax(raw_logits)
-
-        # PERBAIKAN KRITIS: Konvensi Silent-Face-Anti-Spoofing (MiniFASNet):
-        #   3 kelas: [0: Spoof/Fake, 1: Real/Live, 2: Spoof/Fake]
-        #   2 kelas: [0: Spoof/Fake, 1: Real/Live]
-        # Versi sebelumnya SALAH mengambil probs[0] sebagai live score untuk
-        # 3 kelas — probs[0] justru skor SPOOF, bukan live! Ini menyebabkan
-        # foto asli dianggap spoof dan foto spoof dianggap asli.
-        if len(probs) == 3:
-            live_score = float(probs[1])  # index 1 = Real/Live
-        elif len(probs) == 2:
-            live_score = float(probs[1])  # index 1 = Real/Live
-        else:
-            logger.error("Bentuk output model liveness tidak dikenali: %s kelas", len(probs))
+        try:
+            outputs = self._session.run(None, {self._input_name: tensor})
+            if not outputs:
+                raise ValueError("Model tidak mengembalikan output.")
+            raw_logits = np.asarray(outputs[0], dtype=np.float32).reshape(-1)
+            if self._output_class_count is not None and len(raw_logits) != self._output_class_count:
+                raise ValueError(
+                    "Jumlah kelas output berubah: "
+                    f"diharapkan {self._output_class_count}, didapat {len(raw_logits)}."
+                )
+            if self._live_class_index is None:
+                raise ValueError("Mapping kelas live belum dikonfigurasi.")
+            passed, live_score, probs = classify_logits(
+                raw_logits,
+                live_class_index=self._live_class_index,
+                threshold=float(settings.liveness_threshold),
+            )
+            logger.info(
+                "Liveness inference: raw_logits=%s, softmax_probs=%s, live_score=%.4f",
+                raw_logits.tolist(), probs.tolist(), live_score,
+            )
+            return LivenessResult(
+                passed=passed,
+                confidence=live_score,
+                reason=None if passed else "SPOOF_SUSPECTED",
+            )
+        except ValueError:
+            logger.warning("Output liveness tidak valid atau kontrak model salah", exc_info=True)
             return LivenessResult(passed=False, confidence=0.0, reason="MODEL_NOT_CONFIGURED")
-
-        logger.info(
-            "Liveness inference: raw_logits=%s, softmax_probs=%s, live_score=%.4f",
-            raw_logits.tolist(), probs.tolist(), live_score,
-        )
-
-        passed = live_score >= 0.5  # threshold default umum untuk klasifikasi biner/3-kelas semacam ini
-        return LivenessResult(
-            passed=passed,
-            confidence=live_score,
-            reason=None if passed else "SPOOF_SUSPECTED",
-        )
+        except Exception:
+            # Fail closed: a decode/detector/inference failure must never turn
+            # into a live result or an attendance approval.
+            logger.exception("Inference liveness gagal")
+            return LivenessResult(passed=False, confidence=0.0, reason="INFERENCE_ERROR")
 
 
 liveness_engine = LivenessEngine()

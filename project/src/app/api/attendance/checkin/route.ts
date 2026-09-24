@@ -13,6 +13,8 @@ import { publishAttendanceEvent } from "@/lib/realtime";
 import { invalidateCache } from "@/lib/redis";
 import { schoolLocalDateKey } from "@/lib/school-time";
 import { nanoid } from "nanoid";
+import { env } from "@/lib/env";
+import { selectConsistentIdentityFrames } from "@/lib/checkin-frame-policy";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +22,8 @@ export const dynamic = "force-dynamic";
  * POST /api/attendance/checkin — alur presensi UTAMA sistem ini.
  *
  * Siswa buka website di HP PRIBADI masing-masing, ketik NISN, kamera HP
- * aktif, foto diambil dan dikirim ke sini. TIDAK ADA autentikasi device
+ * aktif, beberapa frame diambil dari stream dan dikirim sebagai field `photo`
+ * berulang. TIDAK ADA autentikasi device
  * (bandingkan dengan POST /api/attendance yang lama — itu untuk kamera/kios
  * TEPERCAYA milik sekolah dengan API key, kasus yang berbeda dan belum tentu
  * dipakai). Endpoint ini PUBLIK secara desain (siapa pun bisa memanggilnya
@@ -45,6 +48,10 @@ const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/png"]);
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
 const DEDUP_WINDOW_MINUTES = 5;
 
+function isFrameValidationError(error: unknown): boolean {
+  return error instanceof FaceServiceError && (error.statusCode === 400 || error.statusCode === 422);
+}
+
 export const POST = withErrorHandling(async (req: Request) => {
   const ip = getClientIp(req) ?? "unknown";
 
@@ -54,7 +61,7 @@ export const POST = withErrorHandling(async (req: Request) => {
   }
 
   const nisnRaw = formData.get("nisn");
-  const photo = formData.get("photo");
+  const photoEntries = formData.getAll("photo");
 
   const nisnResult = nisnSchema.safeParse(nisnRaw);
   if (!nisnResult.success) {
@@ -68,14 +75,22 @@ export const POST = withErrorHandling(async (req: Request) => {
   await checkRateLimit(nisnLimit.key, nisnLimit.limit, nisnLimit.windowSeconds);
   await checkRateLimit(ipLimit.key, ipLimit.limit, ipLimit.windowSeconds);
 
-  if (!photo || !(photo instanceof File)) {
-    throw Errors.validation({ photo: ["File foto (field 'photo') wajib diunggah."] });
+  const photos = photoEntries.filter((entry): entry is File => entry instanceof File);
+  if (photos.length !== photoEntries.length) {
+    throw Errors.validation({ photo: ["Semua field 'photo' harus berupa file."] });
   }
-  if (!ALLOWED_MIME_TYPES.has(photo.type)) {
+  if (photos.length !== env.NEXT_PUBLIC_CHECKIN_FRAME_COUNT) {
+    throw Errors.validation({
+      photo: [
+        `Kirim tepat ${env.NEXT_PUBLIC_CHECKIN_FRAME_COUNT} frame foto untuk verifikasi presensi.`,
+      ],
+    });
+  }
+  if (photos.some((entry) => !ALLOWED_MIME_TYPES.has(entry.type))) {
     throw Errors.validation({ photo: ["Tipe file harus JPEG atau PNG."] });
   }
-  if (photo.size > MAX_FILE_SIZE_BYTES) {
-    throw Errors.validation({ photo: ["Ukuran file maksimum 5MB."] });
+  if (photos.some((entry) => entry.size > MAX_FILE_SIZE_BYTES)) {
+    throw Errors.validation({ photo: ["Ukuran setiap file maksimum 5MB."] });
   }
 
   // Pesan error SENGAJA generik untuk NISN tidak ditemukan / siswa belum
@@ -102,54 +117,69 @@ export const POST = withErrorHandling(async (req: Request) => {
   if (!student || !student.biometricProfile?.isActive) {
     throw genericFailure();
   }
+  const storedEmbeddingRef = student.biometricProfile.embeddingRef;
 
-  const photoBuffer = Buffer.from(await photo.arrayBuffer());
+  const photoBuffers = await Promise.all(
+    photos.map(async (photo) => Buffer.from(await photo.arrayBuffer()))
+  );
   const engine = getFaceRecognitionEngine();
-
-  // 1) Validasi kualitas foto SEBELUM ekstraksi embedding & recognition
-  // Memeriksa: ukuran wajah, blur, brightness, resolusi, pose ekstrem,
-  // wajah terpotong, no_face, multiple_faces.
-  // Jika tidak memenuhi syarat, jangan lanjutkan ke recognition dan jangan buat attendance.
-  const quality = await engine.validatePhotoQuality(photoBuffer);
-  if (!quality.isValid) {
-    const reason = quality.reason ?? "invalid_image";
-    return NextResponse.json(
-      {
-        error: {
-          code: "QUALITY_CHECK_FAILED",
-          message: `Kualitas foto tidak memenuhi syarat: ${reason}`,
-          reason,
-        },
-        reason,
-      },
-      { status: 422 }
-    );
-  }
+  const setting = await getEffectiveAttendanceSetting(student.classId);
 
   let similarity: number;
   let livenessPassed: boolean;
 
   try {
-    // 2) Liveness DULU, sebelum generate embedding — kalau ini foto/video
-    // orang lain yang ditunjukkan ke kamera (spoof), tidak ada gunanya
-    // lanjut menghitung kecocokan sama sekali.
-    const liveness = await engine.checkLiveness(photoBuffer);
+    // 1) Face detection + quality filtering per frame. Frame yang tidak
+    // memiliki tepat satu wajah, resolusi cukup, atau tidak cukup tajam dibuang.
+    const qualityResults = await Promise.all(
+      photoBuffers.map(async (buffer) => {
+        try {
+          return (await engine.validatePhotoQuality(buffer)).isValid;
+        } catch (err) {
+          if (isFrameValidationError(err)) return false;
+          throw err;
+        }
+      })
+    );
+    const qualityFrames = photoBuffers.filter((_, index) => qualityResults[index]);
+    if (qualityFrames.length < env.CHECKIN_MIN_CONSISTENT_FRAMES) {
+      throw genericFailure();
+    }
+
+    // 2) Face recognition per frame (generate embedding + 1:1 comparison),
+    // lalu identity harus konsisten pada minimal K frame.
+    const recognitionResults = await Promise.all(
+      qualityFrames.map(async (buffer) => {
+        try {
+          const liveEmbedding = await engine.generateEmbedding(buffer);
+          const frameSimilarity = await engine.compareEmbeddings(
+            liveEmbedding.embeddingRef,
+            storedEmbeddingRef
+          );
+          return { frame: buffer, similarity: frameSimilarity };
+        } catch (err) {
+          if (isFrameValidationError(err)) return null;
+          throw err;
+        }
+      })
+    );
+    const consistentFrames = selectConsistentIdentityFrames(
+      recognitionResults.filter((result): result is NonNullable<typeof result> => result !== null),
+      setting.matchThreshold,
+      env.CHECKIN_MIN_CONSISTENT_FRAMES
+    );
+    if (!consistentFrames) {
+      throw genericFailure();
+    }
+    similarity = Math.min(...consistentFrames.map((result) => result.similarity));
+
+    // 3) Liveness verification adalah tahap terpisah setelah recognition.
+    // Hasil dihitung server dari frame mentah, bukan dari client.
+    const liveness = await engine.checkLiveness(consistentFrames.map((result) => result.frame));
     if (!liveness.passed) {
       throw genericFailure();
     }
     livenessPassed = liveness.passed;
-
-    const liveEmbedding = await engine.generateEmbedding(photoBuffer);
-    similarity = await engine.compareEmbeddings(
-      liveEmbedding.embeddingRef,
-      student.biometricProfile.embeddingRef
-    );
-
-    const setting = await getEffectiveAttendanceSetting(student.classId);
-
-    if (similarity < setting.matchThreshold) {
-      throw genericFailure();
-    }
   } catch (err) {
     if (err instanceof FaceServiceError) {
       // Jika face-service menolak dengan 422/400 dan menyertakan alasan kualitas foto,
@@ -196,7 +226,6 @@ export const POST = withErrorHandling(async (req: Request) => {
     );
   }
 
-  const setting = await getEffectiveAttendanceSetting(student.classId);
   const status = resolveAttendanceStatus(recordedAt, setting);
   const idempotencyKey = `checkin-${student.id}-${recordedAt.getTime()}-${nanoid(8)}`;
 
@@ -253,7 +282,7 @@ export const POST = withErrorHandling(async (req: Request) => {
     recordedAt: recordedAt.toISOString(),
   });
 
-  // photoBuffer tidak pernah di-upload/disimpan di mana pun — biarkan
+  // photoBuffers tidak pernah di-upload/disimpan di mana pun — biarkan
   // di-garbage-collect begitu function ini selesai (tidak ada langkah
   // eksplisit "hapus" karena memang tidak pernah ada langkah "simpan").
   return NextResponse.json(

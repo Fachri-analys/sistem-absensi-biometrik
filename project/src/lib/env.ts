@@ -43,6 +43,19 @@ const envSchema = z.object({
   FACE_SERVICE_API_KEY: z
     .string()
     .min(32, "FACE_SERVICE_API_KEY wajib minimal 32 karakter — harus SAMA PERSIS dengan INTERNAL_SERVICE_KEY di face-service/.env."),
+  // Jumlah frame capture bersifat non-secret supaya browser dapat memakai
+  // konfigurasi yang sama dengan server tanpa mengubah kontrak endpoint.
+  NEXT_PUBLIC_CHECKIN_FRAME_COUNT: z.coerce.number().int().min(1).max(10).default(5),
+  CHECKIN_MIN_CONSISTENT_FRAMES: z.coerce.number().int().min(1).max(10).default(3),
+  NEXT_PUBLIC_CHECKIN_FRAME_INTERVAL_MS: z.coerce.number().int().min(0).max(2000).default(150),
+}).superRefine((values, ctx) => {
+  if (values.CHECKIN_MIN_CONSISTENT_FRAMES > values.NEXT_PUBLIC_CHECKIN_FRAME_COUNT) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["CHECKIN_MIN_CONSISTENT_FRAMES"],
+      message: "CHECKIN_MIN_CONSISTENT_FRAMES tidak boleh melebihi NEXT_PUBLIC_CHECKIN_FRAME_COUNT.",
+    });
+  }
 });
 
 function loadEnv() {

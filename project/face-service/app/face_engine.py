@@ -102,6 +102,7 @@ class FaceEngine:
         if self._app is None:
             raise RuntimeError("InsightFace model belum diinisialisasi.")
 
+        # Detection is the next gate after basic image-quality checks.
         faces = self._app.get(img)
         if len(faces) == 0:
             return None, QualityResult(is_valid=False, reason="no_face")

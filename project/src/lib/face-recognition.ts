@@ -30,6 +30,7 @@
  */
 
 import { env } from "./env";
+import { summarizeLiveness } from "./checkin-frame-policy";
 
 export type PhotoQualityReason =
   | "no_face"
@@ -52,7 +53,15 @@ export interface PhotoQualityResult {
 
 export interface LivenessResult {
   passed: boolean;
-  reason?: "NO_FACE_DETECTED" | "SPOOF_SUSPECTED" | "NO_MOTION_DETECTED" | "LOW_CONFIDENCE";
+  reason?:
+    | "NO_FACE_DETECTED"
+    | "MULTIPLE_FACES"
+    | "INVALID_IMAGE"
+    | "SPOOF_SUSPECTED"
+    | "MODEL_NOT_CONFIGURED"
+    | "INFERENCE_ERROR"
+    | "NO_MOTION_DETECTED"
+    | "LOW_CONFIDENCE";
   confidence?: number;
 }
 
@@ -86,7 +95,6 @@ export interface FaceRecognitionEngine {
 
   /** Multi-sample enrollment: generate embedding from multiple face photos. */
   generateMultiSampleEmbedding(imageBuffers: Buffer[]): Promise<MultiSampleEmbeddingResult>;
-
   /**
    * Perbandingan 1:1 SATU live capture vs SATU template tersimpan — BUKAN
    * pencarian 1:N ke seluruh basis data siswa. Ini keputusan arsitektur
@@ -129,7 +137,10 @@ export class MockFaceRecognitionEngine implements FaceRecognitionEngine {
   }
 
   async checkLiveness(): Promise<LivenessResult> {
-    return { passed: true, confidence: 1 };
+    // Fail closed: mock tidak boleh mensimulasikan liveness yang lolos,
+    // karena itu akan membuat test/mock engine terlihat seperti proteksi
+    // anti-spoofing yang nyata.
+    return { passed: false, confidence: 0, reason: "MODEL_NOT_CONFIGURED" };
   }
 
   async generateEmbedding(imageBuffer: Buffer): Promise<EmbeddingResult> {
@@ -251,23 +262,45 @@ class HttpFaceRecognitionEngine implements FaceRecognitionEngine {
   }
 
   async checkLiveness(mediaBuffer: Buffer | Buffer[]): Promise<LivenessResult> {
-    // face-service v0.1.0 baru menerima SATU foto (bukan multi-frame) —
-    // lihat catatan di face-service/app/liveness_engine.py soal potensi
-    // pengembangan multi-frame di masa depan. Kalau dikirim array, ambil
-    // frame pertama saja untuk sekarang.
-    const buffer = Array.isArray(mediaBuffer) ? mediaBuffer[0] : mediaBuffer;
-    if (!buffer) {
+    // MiniFASNet melakukan inferensi satu frame per request. Jika capture
+    // berisi beberapa frame, semua frame diproses dan liveness memakai quorum
+    // yang sama dengan kebijakan konsistensi check-in.
+    const frames = Array.isArray(mediaBuffer) ? mediaBuffer : [mediaBuffer];
+    if (frames.length === 0) {
       return { passed: false, reason: "NO_FACE_DETECTED" };
     }
-    const result = await this.postMultipart<{
-      passed: boolean;
-      confidence: number;
-      reason?: string;
-    }>("/v1/liveness", buffer);
+    const results = await Promise.all(
+      frames.map(async (buffer) => {
+        try {
+          const result = await this.postMultipart<{
+            passed: boolean;
+            confidence: number;
+            reason?: string;
+          }>("/v1/liveness", buffer);
+          return {
+            passed: result.passed,
+            confidence: result.confidence,
+            reason: result.reason,
+          };
+        } catch (err) {
+          // A malformed frame or a frame without exactly one face is filtered
+          // out of the liveness quorum; infrastructure/model failures still
+          // propagate and fail the request instead of being hidden.
+          if (err instanceof FaceServiceError && (err.statusCode === 400 || err.statusCode === 422)) {
+            return { passed: false, confidence: 0, reason: "INVALID_IMAGE" };
+          }
+          throw err;
+        }
+      })
+    );
+    const summary = summarizeLiveness(
+      results,
+      Array.isArray(mediaBuffer) ? env.CHECKIN_MIN_CONSISTENT_FRAMES : 1
+    );
     return {
-      passed: result.passed,
-      confidence: result.confidence,
-      reason: result.reason as LivenessResult["reason"],
+      passed: summary.passed,
+      confidence: summary.confidence,
+      reason: summary.reason as LivenessResult["reason"],
     };
   }
 
@@ -324,7 +357,6 @@ class HttpFaceRecognitionEngine implements FaceRecognitionEngine {
       sampleCount: result.sample_count,
     };
   }
-
   async compareEmbeddings(liveEmbeddingRef: string, storedEmbeddingRef: string): Promise<number> {
     const response = await fetch(`${env.FACE_SERVICE_URL}/v1/compare`, {
       method: "POST",

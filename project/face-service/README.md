@@ -35,6 +35,34 @@ curl http://localhost:8000/health          # {"status": "ok"}
 curl http://localhost:8000/ready           # cek model liveness terpasang
 ```
 
+## Alur presensi
+
+Untuk jalur check-in HP, browser mengambil beberapa frame dari stream kamera
+(jumlahnya diatur oleh `NEXT_PUBLIC_CHECKIN_FRAME_COUNT`). Server melakukan
+quality filtering dan recognition per frame, lalu mensyaratkan identitas yang
+cocok minimal `CHECKIN_MIN_CONSISTENT_FRAMES` kali sebelum menjalankan liveness
+pada frame-frame tersebut. Endpoint frontend tetap sama; beberapa frame dikirim
+sebagai beberapa field multipart `photo` dengan nama yang sama.
+
+Presensi melewati tahap terpisah berikut di server:
+
+```text
+face detection
+  → quality check
+  → face recognition (embedding + 1:1 comparison)
+  → liveness verification (MiniFASNet)
+  → attendance
+```
+
+Liveness tidak mempercayai flag dari browser dan tidak diimplementasikan
+sebagai mock yang selalu `true`. Jika model tidak ada, kontraknya salah, atau
+inference gagal, hasilnya fail-closed (`passed: false`).
+
+Attendance hanya dibuat setelah quorum identity dan liveness terpenuhi.
+Constraint database `studentId + attendanceDate` menjadi pengaman terakhir
+terhadap race condition dan duplicate attendance pada hari/sesi sekolah yang
+sama.
+
 ## Yang SUDAH diverifikasi jalan (bukan sekadar ditulis)
 
 Selama pengembangan, alur berikut diuji end-to-end dengan foto wajah asli
@@ -47,8 +75,9 @@ Selama pengembangan, alur berikut diuji end-to-end dengan foto wajah asli
 
 ## Yang BELUM diverifikasi — WAJIB dicek sebelum produksi
 
-- **Liveness detection (`/v1/liveness`) belum diuji dengan model & foto
-  asli** — lingkungan pengembangan tidak punya akses ke file bobot model.
+- **Liveness detection (`/v1/liveness`) belum diuji dengan bobot model & foto
+  asli di repository ini** — file bobot dan dataset pengujian tidak tersedia
+  di lingkungan pengembangan.
   Lihat `models/README.md` untuk cara memasang dan mengujinya sendiri
   sebelum sistem ini dipakai siswa sungguhan. Tanpa model ini terpasang,
   endpoint akan menolak SEMUA request (fail-closed by design) — bukan
